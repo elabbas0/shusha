@@ -1,0 +1,15 @@
+Shusha includes the kernel and drivers of the ICDA project.
+
+  Required Notice: Copyright ICDA Project (https://github.com/elabbas0/ICDA)
+
+Imported from ICDA commit e65f40b7eb966f7f8c0abf05055f0f79be6e3c98:
+  kernel/   (CPU, memory, scheduler, syscalls, VFS, drivers, network, crypto)
+  boot/     (GRUB configuration)
+
+That code is licensed under LICENSE-ICDA (PolyForm Noncommercial 1.0.0
+plus the ICDA Additional Terms). Shusha's own code (user/, crypto/, tests/,
+scripts/, docs/) is written for Shusha; see docs/PLAN.md decision D8 for
+the licensing status of Shusha as a whole.
+
+Changes made to the imported kernel are recorded in the git history of
+this repository.

@@ -1,0 +1,213 @@
+#include "splash.h"
+
+#include "../drivers/display/font.h"
+#include "../drivers/display/framebuffer.h"
+#include "version.h"
+
+static int splash_on = 0;
+
+static const uint32_t splash_bg      = 0x000F172A;
+static const uint32_t splash_accent  = 0x0038BDF8;
+static const uint32_t splash_track   = 0x001E293B;
+static const uint32_t splash_muted   = 0x0094A3B8;
+static const uint32_t splash_white   = 0x00F1F5F9;
+
+static uint32_t splash_last_fill = 0;                /* bar fill permille */
+static uint32_t splash_frame = 0;                    /* tick-driven anim frame */
+
+/* Draw one ASCII glyph scaled by `scale` (integer pixels per font pixel),
+ * centered horizontally around the caller-provided pixel origin. */
+static void splash_glyph_scaled(int x0, int y0, char c, int scale,
+                                uint32_t fg, uint32_t bg) {
+    unsigned char uc = (unsigned char)c;
+    const unsigned char *glyph;
+
+    if (uc < FONT_FIRST || uc > FONT_LAST) uc = '?';
+    glyph = font_data[uc - FONT_FIRST];
+
+    for (int row = 0; row < FONT_HEIGHT; row++) {
+        unsigned char bits = glyph[row];
+        for (int col = 0; col < FONT_WIDTH; col++) {
+            uint32_t color = (bits & (0x80 >> col)) ? fg : bg;
+            for (int sy = 0; sy < scale; sy++) {
+                for (int sx = 0; sx < scale; sx++) {
+                    fb_put_pixel(x0 + col * scale + sx, y0 + row * scale + sy, color);
+                }
+            }
+        }
+    }
+}
+
+static void splash_wordmark(const char *text, int center_x, int y, int scale) {
+    int len = 0;
+    while (text[len]) len++;
+    int total = len * FONT_WIDTH * scale;
+    int x = center_x - total / 2;
+    for (int i = 0; i < len; i++) {
+        splash_glyph_scaled(x, y, text[i], scale, splash_white, splash_bg);
+        x += FONT_WIDTH * scale;
+    }
+}
+
+/* Small centered 1x line (normal font size). */
+static void splash_text_center(const char *text, int center_x, int y,
+                               uint32_t color) {
+    int len = 0;
+    while (text[len]) len++;
+    int total = len * FONT_CELL_WIDTH;
+    int x = center_x - total / 2;
+    for (int i = 0; i < len; i++) {
+        fb_draw_char(x, y, text[i], color, splash_bg);
+        x += FONT_CELL_WIDTH;
+    }
+}
+
+static uint32_t splash_progress_permille(uint32_t stage) {
+    if (stage >= 120 && stage <= 125) {
+        /* network / hda / audio / nvme / ahci / ata live in the S12 gap */
+        return 380 + (stage - 119) * 50;
+    }
+    if (stage >= 13 && stage <= 21) {
+        return 680 + (stage - 13) * 29;
+    }
+    if (stage >= 22) {
+        return 1000;
+    }
+    if (stage <= 12) {
+        return stage * 30;
+    }
+    return 0;
+}
+
+void splash_init(void) {
+    int w;
+    int h;
+    int bar_w;
+    int bar_x;
+    int bar_y;
+
+    if (!fb_available() || splash_on) return;
+    w = fb_width;
+    h = fb_height;
+    if (w <= 0 || h <= 0) return;
+
+    fb_clear(splash_bg);
+
+    /* Wordmark + tagline + version, vertically balanced around the upper third. */
+    splash_wordmark("ICDA", w / 2, h / 2 - 190, 8);
+    splash_text_center("operating system", w / 2, h / 2 - 40, splash_muted);
+    /* Show "v" + ICDA_VERSION_STRING centered below the tagline.
+     * Bounds-safe: strlen("v" ICDA_VERSION_STRING) <= 16. */
+    {
+        char ver[24];
+        int vi = 0;
+        const char *prefix = "v";
+        const char *p;
+        for (p = prefix; *p && vi < 23; p++) ver[vi++] = *p;
+        for (p = ICDA_VERSION_STRING; *p && vi < 23; p++) ver[vi++] = *p;
+        ver[vi] = '\0';
+        splash_text_center(ver, w / 2, h / 2 - 10, splash_muted);
+    }
+
+    /* Progress bar track. */
+    bar_w = w / 2;
+    if (bar_w > 640) bar_w = 640;
+    bar_x = (w - bar_w) / 2;
+    bar_y = h / 2 + 60;
+    fb_fill_rect(bar_x, bar_y, bar_w, 6, splash_track);
+    fb_fill_rect(bar_x, bar_y + 6, bar_w, 1, 0x00202A40);
+
+    splash_text_center("starting", w / 2, bar_y + 22, splash_muted);
+
+    splash_last_fill = 0;
+    splash_frame = 0;
+    splash_on = 1;
+    splash_progress(1, "serial");
+}
+
+/* Tick-driven spinner: 8 dots on a small ring under the stage label.
+ * Each splash_progress call advances one frame (bootstage-driven, no
+ * timer needed, ~22 frames total). Cost is 9 tiny fill_rects per call
+ * (one clear + 8 dots) — microseconds, no measurable boot slowdown. */
+static void splash_spinner(int cx, int cy, uint32_t frame) {
+    static const int off_x[8] = { 0, 10, 14, 10, 0, -10, -14, -10 };
+    static const int off_y[8] = { -14, -10, 0, 10, 14, 10, 0, -10 };
+    uint32_t active = frame % 8U;
+    int i;
+
+    /* Clear the spinner cell to the splash background first so the
+     * previous frame's lit dot is erased. Bounds-safe: fill_rect
+     * clips, and the cell is 36x36 centered at (cx,cy). */
+    fb_fill_rect(cx - 18, cy - 18, 36, 36, splash_bg);
+    for (i = 0; i < 8; i++) {
+        uint32_t color = ((uint32_t)i == active) ? splash_accent : splash_track;
+        int dx = off_x[i];
+        int dy = off_y[i];
+        int sz = ((uint32_t)i == active) ? 6 : 4;
+        int off = sz / 2;
+        if (dx < -32768 || dx > 32767 || dy < -32768 || dy > 32767) {
+            continue;
+        }
+        fb_fill_rect(cx + dx - off, cy + dy - off, sz, sz, color);
+    }
+}
+
+void splash_progress(uint32_t stage, const char *label) {
+    int w;
+    int h;
+    int bar_w;
+    int bar_x;
+    int bar_y;
+    uint32_t permille = splash_progress_permille(stage);
+    uint32_t fill;
+
+    if (!splash_on) return;
+    w = fb_width;
+    h = fb_height;
+    if (w <= 0 || h <= 0) return;
+    bar_w = w / 2;
+    if (bar_w > 640) bar_w = 640;
+    bar_x = (w - bar_w) / 2;
+    bar_y = h / 2 + 60;
+
+    if (permille > 1000) permille = 1000;
+    if (permille < splash_last_fill) permille = splash_last_fill;
+    fill = (uint32_t)((uint64_t)bar_w * permille / 1000);
+    if (fill > splash_last_fill) {
+        /* Eased leading edge: paint the newest chunk with a brighter
+         * pulse on alternating frames so motion reads as smooth
+         * rather than stepped. */
+        uint32_t lead = (splash_frame & 1U) ? 0x007DD3FC : splash_accent;
+        uint32_t chunk = fill - splash_last_fill;
+        if (chunk > 8) {
+            fb_fill_rect(bar_x + (int)splash_last_fill, bar_y,
+                         (int)(chunk - 4), 6, splash_accent);
+            fb_fill_rect(bar_x + (int)fill - 4, bar_y, 4, 6, lead);
+        } else {
+            fb_fill_rect(bar_x + (int)splash_last_fill, bar_y,
+                         (int)(fill - splash_last_fill), 6, lead);
+        }
+        splash_last_fill = fill;
+    }
+
+    /* Stage label under the bar - the one piece of boot telemetry kept
+     * on screen, so a hang still names the failing subsystem. */
+    if (label && *label) {
+        splash_text_center(label, w / 2, bar_y + 40, splash_muted);
+    }
+
+    /* Spinner below the label. Gated on screen height so small modes
+     * never draw off-screen. */
+    if (h > 0 && bar_y + 78 + 18 < h && bar_y + 78 - 18 > 0) {
+        splash_spinner(w / 2, bar_y + 78, splash_frame);
+    }
+    splash_frame++;
+}
+
+void splash_finish(void) {
+    splash_on = 0;
+}
+
+int splash_active(void) {
+    return splash_on;
+}
