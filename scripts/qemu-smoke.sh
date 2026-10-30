@@ -27,7 +27,12 @@ if grep -Eq "FAIL|OOM|PAGE FAULT|EXCEPTION" "$log"; then
     exit 1
 fi
 
-for marker in "scheduler core online" "ramfs online" "csprng" "shell ready"; do
+if ! grep -Eq "wm: desktop ready|shell ready" "$log"; then
+    echo "smoke: userspace never reached the desktop or shell"
+    cat "$log"
+    exit 1
+fi
+for marker in "scheduler core online" "ramfs online" "csprng"; do
     if ! grep -q "$marker" "$log"; then
         echo "smoke: missing boot marker: $marker"
         cat "$log"
