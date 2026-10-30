@@ -1,0 +1,137 @@
+5 machines up
+
+[create + invite + join]
+  vm1$ ws create shusha-team
+        created workspace shusha-team - you are rank 0 (admin)
+  ok    vm1 creates the workspace as admin
+  vm1$ ws invite
+        invite code (single use):
+        shuvh7aaan4dnsun3jdxnkuxboeo3lbe5szd7wgoz5ongbad62h
+  ok    invite code for vm2
+  vm1$ ws invite
+        invite code (single use):
+        shuvh7aaan4dnsun3jdxnkuxboefq3paw5j6o3kjkez4n6yffn7
+  ok    invite code for vm3
+  vm1$ ws invite
+        invite code (single use):
+        shuvh7aaan4dnsun3jdxnkuxbmpa5b6lwldn7hbze3ssqitavmh
+  ok    invite code for vm4
+  vm1$ ws invite
+        invite code (single use):
+        shuvh7aaan4dnsun3jdxnkuxbjyw4yi3gspbkktqbsjw7roch77
+  ok    invite code for vm5
+  vm2$ ws join shuvh7aaan4dnsun3jdxnkuxboeo3lbe5szd7wgoz5ongaad62h mallory
+        the admin refused the join (invite invalid or already used)
+  ok    forged invite is refused
+  vm2$ ws join shuvh7aaan4dnsun3jdxnkuxboeo3lbe5szd7wgoz5ongbad62h user2
+        joined workspace shusha-team as rank 1
+  ok    vm2 joins as rank 1
+  vm3$ ws join shuvh7aaan4dnsun3jdxnkuxboeo3lbe5szd7wgoz5ongbad62h reuse
+        the admin refused the join (invite invalid or already used)
+  ok    vm2's used invite is refused for vm3
+  vm3$ ws join shuvh7aaan4dnsun3jdxnkuxboefq3paw5j6o3kjkez4n6yffn7 user3
+        joined workspace shusha-team as rank 2
+  ok    vm3 joins as rank 2
+  vm4$ ws join shuvh7aaan4dnsun3jdxnkuxbmpa5b6lwldn7hbze3ssqitavmh user4
+        joined workspace shusha-team as rank 3
+  ok    vm4 joins as rank 3
+  vm5$ ws join shuvh7aaan4dnsun3jdxnkuxbjyw4yi3gspbkktqbsjw7roch77 user5
+        joined workspace shusha-team as rank 4
+  ok    vm5 joins as rank 4
+
+[members agree on the signed log]
+  vm1$ ws members
+          rank 0  admin  169.254.0.1  key a94ca8665ccd  (you)
+          rank 1  user2  169.254.0.2  key f8b10a758dc6
+          rank 2  user3  169.254.0.3  key 788dc6196b5f
+          rank 3  user4  169.254.0.4  key f8a09fb9c870
+          rank 4  user5  169.254.0.5  key 0751dd533eee
+  ok    vm1 sees ranks 0-4
+  vm2$ ws members
+          rank 0  admin  169.254.0.1  key a94ca8665ccd
+          rank 1  user2  169.254.0.2  key f8b10a758dc6  (you)
+          rank 2  user3  169.254.0.3  key 788dc6196b5f
+          rank 3  user4  169.254.0.4  key f8a09fb9c870
+          rank 4  user5  169.254.0.5  key 0751dd533eee
+  ok    vm2 sees ranks 0-4
+  vm3$ ws members
+          rank 0  admin  169.254.0.1  key a94ca8665ccd
+          rank 1  user2  169.254.0.2  key f8b10a758dc6
+          rank 2  user3  169.254.0.3  key 788dc6196b5f  (you)
+          rank 3  user4  169.254.0.4  key f8a09fb9c870
+          rank 4  user5  169.254.0.5  key 0751dd533eee
+  ok    vm3 sees ranks 0-4
+  vm4$ ws members
+          rank 0  admin  169.254.0.1  key a94ca8665ccd
+          rank 1  user2  169.254.0.2  key f8b10a758dc6
+          rank 2  user3  169.254.0.3  key 788dc6196b5f
+          rank 3  user4  169.254.0.4  key f8a09fb9c870  (you)
+          rank 4  user5  169.254.0.5  key 0751dd533eee
+  ok    vm4 sees ranks 0-4
+  vm5$ ws members
+          rank 0  admin  169.254.0.1  key a94ca8665ccd
+          rank 1  user2  169.254.0.2  key f8b10a758dc6
+          rank 2  user3  169.254.0.3  key 788dc6196b5f
+          rank 3  user4  169.254.0.4  key f8a09fb9c870
+          rank 4  user5  169.254.0.5  key 0751dd533eee  (you)
+  ok    vm5 sees ranks 0-4
+
+[rank-based file access]
+  vm3$ ws put /home/plan.txt
+        shared plan.txt (14 bytes, encrypted)
+        replicated to 4 of 4 member(s)
+  ok    vm3 (rank 2) shares plan.txt
+  vm1$ ws cat plan.txt
+        rank-two-plan
+  ok    rank 0 reads a rank-2 file
+  vm2$ ws cat plan.txt
+        rank-two-plan
+  ok    rank 1 reads a rank-2 file
+  vm3$ ws cat plan.txt
+        rank-two-plan
+  ok    rank 2 reads a rank-2 file
+  vm4$ ws files
+          (locked file)  owner rank 2  [no access - ws request]
+  ok    rank 3 cannot open a rank-2 file
+  vm5$ ws files
+          (locked file)  owner rank 2  [no access - ws request]
+  ok    rank 4 cannot open a rank-2 file
+
+[request + grant]
+  vm4$ ws request rank2
+        access requested from rank 2
+  ok    rank 3 asks the owner for access
+  vm3$ ws requests
+          rank 3 asks for plan.txt   -> ws grant <file> 3
+  ok    owner sees the request
+  vm3$ ws grant plan.txt 3
+        granted plan.txt to rank 3
+        replicated to 4 of 4 member(s)
+  ok    owner grants rank 3
+  vm4$ ws cat plan.txt
+        rank-two-plan
+  ok    rank 3 reads it after the grant
+  vm5$ ws files
+          (locked file)  owner rank 2  [no access - ws request]
+  ok    rank 4 is still locked out
+
+[admin offline]
+  vm1 (admin) powered off
+  vm2$ ws cat plan.txt
+        rank-two-plan
+  ok    rank 1 still reads the replica
+  vm5$ ws put /home/notes.txt
+        shared notes.txt (16 bytes, encrypted)
+        replicated to 3 of 4 member(s) - the rest pick it up on their next sync
+  ok    rank 4 shares a file to the 3 online members
+  vm2$ ws cat notes.txt
+        rank-four-notes
+  ok    rank 1 reads it with the admin offline
+  vm3$ ws cat notes.txt
+        rank-four-notes
+  ok    rank 2 reads it with the admin offline
+  vm4$ ws cat notes.txt
+        rank-four-notes
+  ok    rank 3 reads it with the admin offline
+
+PASS: 0 failure(s)

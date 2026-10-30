@@ -1,0 +1,38 @@
+capture: build/lan/vm3.pcap
+secure-channel packets on UDP 7100: 87, between 6 address pairs
+  HS1  initiator: X25519 + ML-KEM-768 public keys                    x4    (first one 1225 bytes)
+  HS2  responder: X25519 + ML-KEM ciphertext + encrypted identity    x4    (first one 1249 bytes)
+  HS3  initiator: encrypted identity + signature                     x4    (first one 121 bytes)
+  DATA ChaCha20-Poly1305 frame                                       x75   (first one 1322 bytes)
+
+sample HS1:
+  01 fa b8 a5 ee 11 d5 f0 02 a5 5b a9 a0 55 67 e6 bd 9e e5 0c 16 c7 41 00 b2 7a d8 cf 7f d6 b5 02
+  04 4f a6 b7 85 6e 53 d4 7a cb e2 8b 75 30 ce bd d2 8e 0e 57 3a e8 50 51 4e 86 56 2d d5 47 1b 22
+  68 c8 83 79 fa f4 7b e8 4a 56 ef 50 49 a9 a4 14 14 8b 43 38 19 46 2c e5 45 33 c4 9c 15 36 06 51
+  ... 1129 more bytes
+
+sample HS2:
+  02 fa b8 a5 ee 11 d5 f0 02 30 36 68 8d 76 0d 04 e8 f2 2f 59 41 bd 94 6b 47 29 40 30 bb 98 78 66
+  ab eb 75 eb 72 f8 0a 07 83 59 f8 d6 d6 58 6f 0d 42 03 d4 fb 8a 18 3a 4e 09 b0 6b dd 1a 76 8f 47
+  c1 c6 ec 31 c3 94 22 79 0b 4d f9 af ec 1f 1c a5 f7 73 28 71 7e e6 a3 54 79 32 e0 60 6e 19 c1 74
+  ... 1153 more bytes
+
+sample HS3:
+  03 30 36 68 8d 76 0d 04 e8 81 38 1f 94 d7 78 52 44 1b f8 c6 e2 08 e0 25 89 50 95 30 21 2c 53 bd
+  b3 02 f1 f9 19 3d e0 35 e2 97 d0 12 08 1c 1b f4 59 35 36 81 c0 de c8 1e c2 94 ff f8 09 2f 88 d3
+  6b bc 20 a2 ab 63 44 d4 8b a2 ca e8 2d c6 8e 92 96 30 90 cc 59 be 2b 5b cb 30 6c 42 8f 60 04 c1
+  ... 25 more bytes
+
+sample DATA:
+  04 30 36 68 8d 76 0d 04 e8 01 00 00 00 00 00 00 00 f2 aa 2d 8e 31 25 5e 9b 58 22 d6 9e 33 3f 77
+  0e 6b 81 61 2f a0 da 6f 7d 9d 6e 64 c9 e0 53 dc b1 8b fa 22 76 37 45 b9 3a 83 e0 6f f0 4a 2d fd
+  78 20 a0 9e 4d f1 f3 31 bf 66 21 b9 0c 05 2a 3d 3c 88 d7 db d5 06 38 0d c8 dd d6 9c 50 f6 6f 17
+  ... 1226 more bytes
+
+encrypted payload: 29488 bytes, entropy 7.991 bits/byte (8.0 = indistinguishable from random)
+plaintext '42000 AZN'                                        not present anywhere in the capture
+plaintext 'budget.txt'                                       not present anywhere in the capture
+plaintext 'Q3 budget'                                        not present anywhere in the capture
+plaintext 'alice'                                            not present anywhere in the capture
+plaintext 'bob draft'                                        not present anywhere in the capture
+plaintext 'shusha-team'                                      not present anywhere in the capture
