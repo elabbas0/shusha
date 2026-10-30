@@ -102,7 +102,7 @@ qemu-smoke:
 # Host-side crypto tests against official vectors (no QEMU needed).
 test:
 	@mkdir -p $(B)/test
-	$(CC) -O2 -Wall -Wextra -Werror -Icrypto -o $(B)/test/crypto_test \
+	$(CC) -O2 -Wall -Wextra -Werror -Icrypto -Itests -o $(B)/test/crypto_test \
 	      tests/crypto_test.c $(wildcard crypto/*.c)
 	$(B)/test/crypto_test
 
