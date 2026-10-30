@@ -1,25 +1,16 @@
-#ifndef ICDA_VERSION_H
-#define ICDA_VERSION_H
+#ifndef SHUSHA_VERSION_H
+#define SHUSHA_VERSION_H
 
 #include <stdint.h>
 
-/* ---- current release --------------------------------------------------- */
+#define SHUSHA_VERSION_MAJOR  0
+#define SHUSHA_VERSION_MINOR  1
+#define SHUSHA_VERSION_PATCH  0
 
-#define ICDA_VERSION_MAJOR  1
-#define ICDA_VERSION_MINOR  5
-#define ICDA_VERSION_PATCH  0
+#define SHUSHA_VERSION_STRING "0.1.0"
+#define SHUSHA_VERSION_BANNER "Shusha " SHUSHA_VERSION_STRING
 
-/* Pack into a single uint32_t:  (major << 24) | (minor << 8) | patch       *
- * Range: major 0-255, minor 0-255, patch 0-255.                            */
-#define ICDA_VERSION_U32 \
-    (((uint32_t)ICDA_VERSION_MAJOR << 24) | \
-     ((uint32_t)ICDA_VERSION_MINOR <<  8) | \
-     ((uint32_t)ICDA_VERSION_PATCH))
+/* Kernel code inherited from ICDA reads the ICDA_ names. */
+#define ICDA_VERSION_STRING SHUSHA_VERSION_STRING
 
-#define ICDA_VERSION_STRING "1.5.0"
-
-/* ---- human-readable banner (for -v flags / logging) --------------------- */
-
-#define ICDA_VERSION_BANNER "ICDA " ICDA_VERSION_STRING
-
-#endif /* ICDA_VERSION_H */
+#endif /* SHUSHA_VERSION_H */

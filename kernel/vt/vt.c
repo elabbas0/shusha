@@ -11,9 +11,20 @@
  */
 static volatile int vt_active = VT_GUI;
 static volatile int vt_pending = 0;
+static int vt_gui_available = 1;
+
+void vt_set_gui_available(int available) {
+    vt_gui_available = available ? 1 : 0;
+    if (!vt_gui_available && vt_active == VT_GUI) {
+        vt_active = VT_TEXT_MIN;
+    }
+}
 
 void vt_request_switch(int number) {
     if (number < VT_GUI || number > VT_TEXT_MAX) {
+        return;
+    }
+    if (number == VT_GUI && !vt_gui_available) {
         return;
     }
     vt_pending = number;

@@ -20,7 +20,6 @@
 #include "drivers/storage/block.h"
 #include "drivers/storage/nvme.h"
 #include "drivers/storage/partition.h"
-#include "drivers/usb/xhci.h"
 #include "diag/bootstage.h"
 #include "diag/splash.h"
 #include "fs/fat32.h"
@@ -190,7 +189,7 @@ void kernel_main(void *multiboot_info) {
         splash_init();
     }
 
-    console_write("ICDA Boot Sequence\n\n", CONSOLE_STYLE_INFO);
+    console_write("Shusha Boot Sequence (ICDA kernel)\n\n", CONSOLE_STYLE_INFO);
     if (live_installer) {
         boot_line("mode", "live installer mode");
     }
@@ -388,15 +387,8 @@ void kernel_main(void *multiboot_info) {
         }
     }
 
-    bootstage_set(126, "usb");
-    if (xhci_init() == 0) {
-        boot_prefix("usb");
-        console_write("xhci online, devices=", CONSOLE_STYLE_INFO);
-        console_write_dec64(xhci_device_count(), CONSOLE_STYLE_INFO);
-        console_write("\n", CONSOLE_STYLE_INFO);
-    } else {
-        boot_line("usb", "xhci unavailable, continuing without usb");
-    }
+    /* USB (xHCI) is not in the imported ICDA tree yet: the upstream
+     * driver sources were never committed. */
 
     if (vfs_init() != 0) {
         boot_halt("storage", "virtual filesystem core failed to initialize");
@@ -409,6 +401,7 @@ void kernel_main(void *multiboot_info) {
         boot_halt("storage", "initramfs could not populate the live filesystem");
     }
     bootstage_set(17, "initramfs");
+    vt_set_gui_available(initramfs_find("/apps/wm.app") != 0);
     (void)vfs_mkdir(vfs_root(), "/home");
     boot_prefix("storage");
     console_write("ramfs online, seeded files=", CONSOLE_STYLE_INFO);

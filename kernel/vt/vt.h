@@ -21,6 +21,10 @@ void vt_request_switch(int number);
 /* Called from the timer IRQ every tick; applies a pending switch. */
 void vt_tick(void);
 
+/* Called once at boot: with no window manager in the image the GUI VT
+ * is unavailable and boot starts on the first text VT instead. */
+void vt_set_gui_available(int available);
+
 int  vt_active_number(void);
 int  vt_is_gui(void);
 
