@@ -440,8 +440,8 @@ static void build_wallpaper(void) {
     const uint32_t *hdr = (const uint32_t *)wallpaper_raw;
     const uint32_t *art = hdr + 2;
     int aw = (int)hdr[0], ah = (int)hdr[1];
-    int th = screen.h * 70 / 100, tw = aw * th / ah;
-    int x0 = screen.w * 79 / 100 - tw / 2, y0 = (screen.h - th) / 2 + PANEL_H / 2 - 20;
+    int th = screen.h * 64 / 100, tw = aw * th / ah;
+    int x0 = screen.w * 80 / 100 - tw / 2, y0 = (screen.h - th) / 2 + PANEL_H / 2 - 24;
     uint32_t step = (uint32_t)(((uint64_t)ah << 16) / (uint64_t)th);
 
     for (int i = 0; i < screen.w * screen.h; i++) wallpaper[i] = WALL_COLOR;
@@ -644,7 +644,7 @@ static void open_window(const ui_msg_t *req) {
     win->w = w;
     win->h = h;
     /* Left of centre, so the wallpaper artwork on the right stays visible. */
-    win->x = 48 + (cascade % 6) * 36;
+    win->x = 24 + (cascade % 6) * 36;
     win->y = PANEL_H + TITLE_H + 22 + (cascade % 6) * 30;
     cascade++;
     if (win->x < 12) win->x = 12;
