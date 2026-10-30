@@ -33,7 +33,11 @@ static void cmd_help(void) {
           "  mkdir <dir>       create a directory\n"
           "  touch <file>      create an empty file\n"
           "  write <file> <t>  replace a file's contents\n"
-          "  stat <path>       file metadata\n"
+          "  stat <path>       file metadata (owner, permissions)\n"
+          "  id                show your user id\n"
+          "  su <uid>          switch to a user id (root only; one way)\n"
+          "  chmod <oct> <p>   change permissions (owner or root)\n"
+          "  chown <uid> <p>   change owner (root only)\n"
           "  ps                list processes\n"
           "  run <app> [args]  start a program and wait for it\n"
           "  random [n]        n bytes from the kernel CSPRNG (/dev/random)\n"
@@ -94,12 +98,18 @@ static void cmd_stat(int argc, char **argv) {
         err("stat", "no such path");
         return;
     }
-    print(st.type == SH_NODE_DIR ? "directory" : "file");
-    print("  size=");
-    print_u64(st.size);
-    print("  inode=");
-    print_u64(st.inode);
-    print(st.readonly ? "  read-only\n" : "  writable\n");
+    {
+        char m[12];
+        print(st.type == SH_NODE_DIR ? "d" : "-");
+        print(fmt_mode(m, st.mode));
+        print("  owner=");
+        print_u64(st.uid);
+        print("  size=");
+        print_u64(st.size);
+        print("  inode=");
+        print_u64(st.inode);
+        print(st.readonly ? "  read-only image\n" : "\n");
+    }
 }
 
 static void cmd_run(int argc, char **argv) {
@@ -138,12 +148,24 @@ static void cmd_random(int argc, char **argv) {
     mem_wipe(buf, sizeof(buf));
 }
 
+static uint64_t parse_u64(const char *p) {
+    uint64_t v = 0;
+    while (*p >= '0' && *p <= '9') v = v * 10 + (uint64_t)(*p++ - '0');
+    return v;
+}
+
+static uint64_t parse_oct(const char *p) {
+    uint64_t v = 0;
+    while (*p >= '0' && *p <= '7') v = v * 8 + (uint64_t)(*p++ - '0');
+    return v;
+}
+
 static void prompt(void) {
     char cwd[128];
     if (sh_getcwd(cwd, sizeof(cwd)) < 0) str_copy(cwd, "?", sizeof(cwd));
-    print("shusha:");
+    print(sh_getuid() == 0 ? "root@shusha:" : "shusha:");
     print(cwd);
-    print("$ ");
+    print(sh_getuid() == 0 ? "# " : "$ ");
 }
 
 static void run_line(char *line) {
@@ -176,6 +198,17 @@ static void run_line(char *line) {
         if (sh_list_procs(io, sizeof(io)) >= 0) print(io);
     } else if (str_eq(c, "run")) cmd_run(argc, argv);
     else if (str_eq(c, "random")) cmd_random(argc, argv);
+    else if (str_eq(c, "id")) {
+        print("uid=");
+        print_u64((uint64_t)sh_getuid());
+        print("\n");
+    } else if (str_eq(c, "su")) {
+        if (need(argc, 2, "su <uid>") && sh_setuid(parse_u64(argv[1])) != 0) err("su", "permission denied");
+    } else if (str_eq(c, "chmod")) {
+        if (need(argc, 3, "chmod <octal> <path>") && sh_chmod(argv[2], parse_oct(argv[1])) != 0) err("chmod", "permission denied");
+    } else if (str_eq(c, "chown")) {
+        if (need(argc, 3, "chown <uid> <path>") && sh_chown(argv[2], parse_u64(argv[1])) != 0) err("chown", "permission denied");
+    }
     else if (str_eq(c, "sync")) {
         if (sh_sync() != 0) err("sync", "failed");
     } else if (str_eq(c, "about")) {

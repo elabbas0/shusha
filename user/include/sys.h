@@ -94,6 +94,8 @@ typedef struct {
     uint64_t modified;
     uint8_t  type;
     uint8_t  readonly;
+    uint32_t uid;   /* owner */
+    uint16_t mode;  /* 0700 owner bits, 0007 others */
 } sh_stat_t;
 
 #define SH_NODE_DIR 2

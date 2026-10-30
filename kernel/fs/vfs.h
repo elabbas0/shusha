@@ -18,7 +18,15 @@ typedef struct {
     uint64_t modified;
     uint8_t type;
     uint8_t readonly;
+    /* append-only (Shusha): owner and permission bits */
+    uint32_t uid;
+    uint16_t mode;
 } vfs_stat_t;
+
+/* Permission bits for vfs_permitted. */
+#define VFS_R 4
+#define VFS_W 2
+#define VFS_X 1
 
 int vfs_init(void);
 vfs_node_t *vfs_root(void);
@@ -48,5 +56,14 @@ uint64_t vfs_node_inode(vfs_node_t *node);
 uint64_t vfs_node_created(vfs_node_t *node);
 uint64_t vfs_node_modified(vfs_node_t *node);
 const char *vfs_node_data(vfs_node_t *node);
+
+/* Ownership and permissions. */
+uint32_t vfs_current_uid(void);
+vfs_node_t *vfs_resolve_parent(vfs_node_t *cwd, const char *path);
+int vfs_permitted(vfs_node_t *node, uint32_t uid, int want);
+void vfs_node_set_owner(vfs_node_t *node, uint32_t uid);
+void vfs_node_set_mode(vfs_node_t *node, uint16_t mode);
+uint32_t vfs_node_uid(vfs_node_t *node);
+uint16_t vfs_node_mode(vfs_node_t *node);
 
 #endif

@@ -225,15 +225,6 @@ static void tty_print_stat(const char *path) {
     console_write("\n", CONSOLE_STYLE_INFO);
 }
 
-static void tty_print_hex4(uint16_t value) {
-    static const char hexd[] = "0123456789abcdef";
-    console_write("0x", CONSOLE_STYLE_INFO);
-    console_write_char(hexd[(value >> 12) & 0xF], CONSOLE_STYLE_INFO);
-    console_write_char(hexd[(value >> 8) & 0xF], CONSOLE_STYLE_INFO);
-    console_write_char(hexd[(value >> 4) & 0xF], CONSOLE_STYLE_INFO);
-    console_write_char(hexd[value & 0xF], CONSOLE_STYLE_INFO);
-}
-
 static int tty_dispatch_line(void) {
     char *line = tty_line;
     char *arg = 0;

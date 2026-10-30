@@ -172,6 +172,82 @@ static int gate_path_ok(const char *path) {
     return strnlen_user(path, 511) != (uint64_t)-1;
 }
 
+/* ---- ownership checks ------------------------------------------------- */
+
+static vfs_node_t *cwd_of(process_t *proc) {
+    return proc->cwd ? proc->cwd : vfs_root();
+}
+
+/* Permission on an existing node; missing nodes are left to the caller. */
+static int may(process_t *proc, vfs_node_t *node, int want) {
+    return vfs_permitted(node, proc->ex_uid, want);
+}
+
+/* Creating `path` needs write permission on its parent directory. */
+static int may_create(process_t *proc, const char *path) {
+    return may(proc, vfs_resolve_parent(cwd_of(proc), path), VFS_W);
+}
+
+static uint64_t parse_dec(const char **p) {
+    uint64_t v = 0;
+    while (**p == ' ') (*p)++;
+    while (**p >= '0' && **p <= '9') v = v * 10 + (uint64_t)(*(*p)++ - '0');
+    return v;
+}
+
+static uint64_t parse_oct(const char **p) {
+    uint64_t v = 0;
+    while (**p == ' ') (*p)++;
+    while (**p >= '0' && **p <= '7') v = v * 8 + (uint64_t)(*(*p)++ - '0');
+    return v;
+}
+
+/* Writes to /dev/setuid, /dev/chmod, /dev/chown.  `buf` is a kernel copy. */
+static uint64_t control_write(process_t *proc, int kind, const char *buf, uint64_t size) {
+    const char *p = buf;
+    uint32_t uid = proc->ex_uid;
+
+    if (kind == DEV_CTL_SETUID) {
+        uint64_t to = parse_dec(&p);
+        /* Root may become anyone; everyone else may only stay themselves. */
+        if (p == buf || to > 0xffffffffULL || (uid != 0 && to != uid)) return (uint64_t)-1;
+        proc->ex_uid = (uint32_t)to;
+        return size;
+    }
+    if (kind == DEV_CTL_CHMOD || kind == DEV_CTL_CHOWN) {
+        uint64_t v = kind == DEV_CTL_CHMOD ? parse_oct(&p) : parse_dec(&p);
+        vfs_node_t *node;
+        if (p == buf) return (uint64_t)-1;
+        while (*p == ' ') p++;
+        node = vfs_resolve(cwd_of(proc), p);
+        if (!node || vfs_node_readonly(node)) return (uint64_t)-1;
+        if (kind == DEV_CTL_CHMOD) {
+            if (uid != 0 && uid != vfs_node_uid(node)) return (uint64_t)-1;
+            vfs_node_set_mode(node, (uint16_t)(v & 0777));
+        } else {
+            if (uid != 0 || v > 0xffffffffULL) return (uint64_t)-1;
+            vfs_node_set_owner(node, (uint32_t)v);
+        }
+        return size;
+    }
+    return (uint64_t)-1;
+}
+
+/* /dev/setuid reads back the caller's uid as text. */
+static long read_dev_uid(process_t *proc, const char *path, char *buf, uint64_t cap) {
+    char tmp[16];
+    int n = 0, len = 0;
+    uint32_t v = proc->ex_uid;
+    if (dev_control_kind(vfs_resolve(cwd_of(proc), path)) != DEV_CTL_SETUID) return -1;
+    do {
+        tmp[n++] = (char)('0' + v % 10);
+        v /= 10;
+    } while (v);
+    while (n && (uint64_t)len + 1 < cap) buf[len++] = tmp[--n];
+    if ((uint64_t)len < cap) buf[len] = '\n';
+    return len + ((uint64_t)len < cap ? 1 : 0);
+}
+
 /* /dev/random: fill the (already validated) user buffer from the CSPRNG.
  * Returns the byte count, or -1 if `path` is not /dev/random. */
 #define DEV_RANDOM_MAX 4096
@@ -206,9 +282,16 @@ static uint64_t sys_vfs_read(const char *path, char *buf, uint64_t cap) {
     {
         /* Text-style read: leave room for the terminator. */
         long n = read_dev_random(proc, path, buf, cap - 1);
+        if (n < 0) n = read_dev_uid(proc, path, buf, cap - 1);
         if (n >= 0) {
             buf[n] = '\0';
             return (uint64_t)n;
+        }
+    }
+    {
+        vfs_node_t *node = vfs_resolve(cwd_of(proc), path);
+        if (node && !may(proc, node, VFS_R)) {
+            return (uint64_t)-1;
         }
     }
 
@@ -237,6 +320,23 @@ static uint64_t sys_vfs_write(const char *path, const char *buf, uint64_t size) 
     }
     if (size != 0 && !user_range_prepare_cur(buf, size)) {
         return (uint64_t)-U_EFAULT;
+    }
+
+    {
+        vfs_node_t *node = vfs_resolve(cwd_of(proc), path);
+        int kind = dev_control_kind(node);
+        if (kind != DEV_CTL_NONE) {
+            char cmd[192];
+            uint64_t n = size < sizeof(cmd) - 1 ? size : sizeof(cmd) - 1;
+            for (uint64_t i = 0; i < n; i++) {
+                cmd[i] = buf[i] == '\n' ? '\0' : buf[i];
+            }
+            cmd[n] = '\0';
+            return control_write(proc, kind, cmd, size);
+        }
+        if (node ? !may(proc, node, VFS_W) : !may_create(proc, path)) {
+            return (uint64_t)-1;
+        }
     }
 
     if (vfs_write(proc->cwd ? proc->cwd : vfs_root(), path, buf ? buf : "", size) != 0) {
@@ -269,8 +369,15 @@ static uint64_t sys_vfs_read_at(const char *path, uint64_t offset, char *buf, ui
 
     {
         long n = read_dev_random(proc, path, buf, cap);
+        if (n < 0 && offset == 0) n = read_dev_uid(proc, path, buf, cap);
         if (n >= 0) {
             return (uint64_t)n;
+        }
+    }
+    {
+        vfs_node_t *node = vfs_resolve(cwd_of(proc), path);
+        if (node && !may(proc, node, VFS_R)) {
+            return 0;
         }
     }
 
@@ -407,7 +514,7 @@ static uint64_t sys_chdir(const char *path) {
     }
 
     next = vfs_resolve(proc->cwd ? proc->cwd : vfs_root(), path);
-    if (!next || vfs_node_type(next) != VFS_NODE_DIR) {
+    if (!next || vfs_node_type(next) != VFS_NODE_DIR || !may(proc, next, VFS_X)) {
         return (uint64_t)-1;
     }
 
@@ -434,7 +541,7 @@ static uint64_t sys_list_dir(const char *path, char *buf, uint64_t cap) {
     } else {
         dir = vfs_resolve(proc->cwd ? proc->cwd : vfs_root(), path);
     }
-    if (!dir || vfs_node_type(dir) != VFS_NODE_DIR) {
+    if (!dir || vfs_node_type(dir) != VFS_NODE_DIR || !may(proc, dir, VFS_R)) {
         return (uint64_t)-1;
     }
 
@@ -536,6 +643,9 @@ static uint64_t sys_mkdir(const char *path) {
         return (uint64_t)-1;
     }
 
+    if (!may_create(proc, path)) {
+        return (uint64_t)-1;
+    }
     return vfs_mkdir(proc->cwd ? proc->cwd : vfs_root(), path) == 0 ? 0 : (uint64_t)-1;
 }
 
@@ -552,6 +662,12 @@ static uint64_t sys_create(const char *path) {
         return (uint64_t)-1;
     }
 
+    {
+        vfs_node_t *node = vfs_resolve(cwd_of(proc), path);
+        if (node ? !may(proc, node, VFS_W) : !may_create(proc, path)) {
+            return (uint64_t)-1;
+        }
+    }
     return vfs_create(proc->cwd ? proc->cwd : vfs_root(), path) == 0 ? 0 : (uint64_t)-1;
 }
 

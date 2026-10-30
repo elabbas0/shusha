@@ -112,3 +112,44 @@ int split_args(char *line, char **argv, int max) {
     }
     return argc;
 }
+
+long sh_getuid(void) {
+    char buf[24];
+    long n = sh_read("/dev/setuid", buf, sizeof(buf));
+    long v = 0;
+    if (n <= 0) return -1;
+    for (int i = 0; buf[i] >= '0' && buf[i] <= '9'; i++) v = v * 10 + (buf[i] - '0');
+    return v;
+}
+
+static int control(const char *dev, const char *text) {
+    return sh_write_file(dev, text, str_len(text)) < 0 ? -1 : 0;
+}
+
+int sh_setuid(uint64_t uid) {
+    char buf[24];
+    return control("/dev/setuid", fmt_u64(buf, uid, 10));
+}
+
+int sh_chmod(const char *path, uint64_t mode) {
+    char buf[160];
+    fmt_u64(buf, mode, 8);
+    str_cat(buf, " ", sizeof(buf));
+    str_cat(buf, path, sizeof(buf));
+    return control("/dev/chmod", buf);
+}
+
+int sh_chown(const char *path, uint64_t uid) {
+    char buf[160];
+    fmt_u64(buf, uid, 10);
+    str_cat(buf, " ", sizeof(buf));
+    str_cat(buf, path, sizeof(buf));
+    return control("/dev/chown", buf);
+}
+
+char *fmt_mode(char *buf, uint32_t mode) {
+    static const char rwx[] = "rwxrwxrwx";
+    for (int i = 0; i < 9; i++) buf[i] = (mode & (0400u >> i)) ? rwx[i] : '-';
+    buf[9] = '\0';
+    return buf;
+}

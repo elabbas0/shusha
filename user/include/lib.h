@@ -21,6 +21,14 @@ void     print(const char *s);
 void     print_u64(uint64_t v);
 void     print_hex(const uint8_t *data, uint64_t n);
 
+/* Identity and permissions (kernel control files in /dev). */
+long     sh_getuid(void);
+int      sh_setuid(uint64_t uid);
+int      sh_chmod(const char *path, uint64_t mode);
+int      sh_chown(const char *path, uint64_t uid);
+/* "rwxr-x---" style text for a mode (10 bytes incl. NUL). */
+char    *fmt_mode(char *buf, uint32_t mode);
+
 /* Split `line` in place on spaces; returns argc (at most max). */
 int      split_args(char *line, char **argv, int max);
 

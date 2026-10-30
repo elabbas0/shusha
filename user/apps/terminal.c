@@ -108,6 +108,12 @@ static void join_args(char *dst, uint64_t cap, int argc, char **argv, int from) 
     }
 }
 
+static uint64_t num(const char *p, unsigned base) {
+    uint64_t v = 0;
+    while (*p >= '0' && *p < (char)('0' + base)) v = v * base + (uint64_t)(*p++ - '0');
+    return v;
+}
+
 static void run_program(const char *path, const char *args) {
     long pid = args && args[0] ? sh_spawn_args(path, args) : sh_spawn(path);
     if (pid < 0) err("cannot start program");
@@ -124,6 +130,7 @@ static void execute(char *cmdline) {
     c = argv[0];
     if (str_eq(c, "help")) {
         out("help clear pwd cd ls cat echo mkdir touch write stat ps run random about exit\n"
+            "id su chmod chown\n"
             "any other word runs /apps/<word>.app (or a path)\n", FG_DIM);
     } else if (str_eq(c, "clear")) {
         clear_screen();
@@ -165,11 +172,25 @@ static void execute(char *cmdline) {
         if (argc < 2 || sh_stat(argv[1], &st) != 0) {
             err("stat: no such path");
         } else {
-            out(st.type == SH_NODE_DIR ? "directory" : "file", FG);
+            char mode[12];
+            out(st.type == SH_NODE_DIR ? "d" : "-", FG);
+            out(fmt_mode(mode, st.mode), FG);
+            out("  owner=", FG_DIM);
+            out(fmt_u64(buf, st.uid, 10), FG);
             out("  size=", FG_DIM);
             out(fmt_u64(buf, st.size, 10), FG);
-            out(st.readonly ? "  read-only\n" : "  writable\n", FG_DIM);
+            out(st.readonly ? "  read-only image\n" : "\n", FG_DIM);
         }
+    } else if (str_eq(c, "id")) {
+        out("uid=", FG_DIM);
+        out(fmt_u64(buf, (uint64_t)sh_getuid(), 10), FG);
+        out("\n", FG);
+    } else if (str_eq(c, "su")) {
+        if (argc < 2 || sh_setuid(num(argv[1], 10)) != 0) err("su: permission denied");
+    } else if (str_eq(c, "chmod")) {
+        if (argc < 3 || sh_chmod(argv[2], num(argv[1], 8)) != 0) err("chmod: permission denied");
+    } else if (str_eq(c, "chown")) {
+        if (argc < 3 || sh_chown(argv[2], num(argv[1], 10)) != 0) err("chown: permission denied");
     } else if (str_eq(c, "ps")) {
         if (sh_list_procs(io, sizeof(io)) >= 0) out(io, FG);
     } else if (str_eq(c, "run")) {

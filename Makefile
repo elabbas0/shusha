@@ -36,14 +36,15 @@ KERNEL_OBJ := $(KERNEL_C:%.c=$(B)/k/%.o) $(KERNEL_ASM:%.asm=$(B)/k/%.asm.o) $(B)
 
 ULIB_OBJ := $(B)/u/lib/crt0.asm.o $(B)/u/lib/lib.o $(B)/u/crypto/mem.o
 UGUI_OBJ := $(B)/u/lib/ui.o $(B)/u/lib/draw.o
-UPROGS   := init shell wm explorer terminal ipccheck
+UPROGS   := init shell wm explorer terminal ipccheck fscheck
 
 USERPROGS := /sbin/init.app=$(B)/user/init.app \
              /apps/shell.app=$(B)/user/shell.app \
              /apps/wm.app=$(B)/user/wm.app \
              /apps/explorer.app=$(B)/user/explorer.app \
              /apps/terminal.app=$(B)/user/terminal.app \
-             /apps/ipccheck.app=$(B)/user/ipccheck.app
+             /apps/ipccheck.app=$(B)/user/ipccheck.app \
+             /apps/fscheck.app=$(B)/user/fscheck.app
 
 UAPPS := $(UPROGS:%=$(B)/user/%.app)
 
@@ -88,6 +89,7 @@ $(B)/u/gen/wallpaper.asm.o: $(B)/gen/wallpaper.raw
 $(B)/user/explorer.app: $(B)/u/apps/explorer.o $(UGUI_OBJ) $(ULIB_OBJ)
 $(B)/user/terminal.app: $(B)/u/apps/terminal.o $(UGUI_OBJ) $(ULIB_OBJ)
 $(B)/user/ipccheck.app: $(B)/u/tests/ipccheck.o $(ULIB_OBJ)
+$(B)/user/fscheck.app: $(B)/u/tests/fscheck.o $(ULIB_OBJ)
 
 $(UAPPS): user/lib/user.ld
 	@mkdir -p $(dir $@)

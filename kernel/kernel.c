@@ -415,6 +415,9 @@ void kernel_main(void *multiboot_info) {
     bootstage_set(17, "initramfs");
     vt_set_gui_available(initramfs_find("/apps/wm.app") != 0);
     (void)vfs_mkdir(vfs_root(), "/home");
+    /* Shared until per-user homes exist; files inside keep their own
+     * owners and modes, so users cannot read or change each other's. */
+    vfs_node_set_mode(vfs_resolve(vfs_root(), "/home"), 0777);
     boot_prefix("storage");
     console_write("ramfs online, seeded files=", CONSOLE_STYLE_INFO);
     console_write_dec64(initramfs_file_count(), CONSOLE_STYLE_INFO);

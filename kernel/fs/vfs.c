@@ -1,5 +1,6 @@
 #include "vfs.h"
 #include "../memory/heap.h"
+#include "../proc/sched.h"
 
 struct vfs_node {
     char *name;
@@ -9,6 +10,8 @@ struct vfs_node {
     uint64_t size;
     uint8_t type;
     uint8_t readonly;
+    uint32_t uid;     /* owner */
+    uint16_t mode;    /* rwx bits: owner (0700) and others (0007) */
     char *data;
     struct vfs_node *parent;
     struct vfs_node *first_child;
@@ -82,6 +85,11 @@ static char *dup_cstr(const char *text) {
     return out;
 }
 
+uint32_t vfs_current_uid(void) {
+    process_t *proc = sched_current_process();
+    return proc ? proc->ex_uid : 0;
+}
+
 static vfs_node_t *new_node(const char *name, uint8_t type, uint8_t readonly) {
     vfs_node_t *node = (vfs_node_t *)kcalloc(1, sizeof(vfs_node_t));
     if (!node) {
@@ -99,6 +107,10 @@ static vfs_node_t *new_node(const char *name, uint8_t type, uint8_t readonly) {
     node->modified = node->created;
     node->type = type;
     node->readonly = readonly;
+    /* New nodes belong to the process creating them (kernel: root). */
+    node->uid = vfs_current_uid();
+    node->mode = type == VFS_NODE_DIR ? 0755 : 0644;
+    if (readonly) node->mode &= (uint16_t)~0222;
     return node;
 }
 
@@ -235,6 +247,38 @@ static vfs_node_t *resolve_parent(vfs_node_t *cwd, const char *path, char *leaf,
     }
 
     return 0;
+}
+
+vfs_node_t *vfs_resolve_parent(vfs_node_t *cwd, const char *path) {
+    char leaf[64];
+    return resolve_parent(cwd, path, leaf, sizeof(leaf), 0);
+}
+
+/* Owner bits for the owner, "other" bits for everyone else; root (uid 0)
+ * may do anything except write the read-only system image. */
+int vfs_permitted(vfs_node_t *node, uint32_t uid, int want) {
+    uint32_t bits;
+    if (!node) return 0;
+    if ((want & VFS_W) && node->readonly) return 0;
+    if (uid == 0) return 1;
+    bits = uid == node->uid ? (node->mode >> 6) & 7u : node->mode & 7u;
+    return (bits & (uint32_t)want) == (uint32_t)want;
+}
+
+void vfs_node_set_owner(vfs_node_t *node, uint32_t uid) {
+    if (node) node->uid = uid;
+}
+
+void vfs_node_set_mode(vfs_node_t *node, uint16_t mode) {
+    if (node) node->mode = mode & 0777;
+}
+
+uint32_t vfs_node_uid(vfs_node_t *node) {
+    return node ? node->uid : 0;
+}
+
+uint16_t vfs_node_mode(vfs_node_t *node) {
+    return node ? node->mode : 0;
 }
 
 int vfs_init(void) {
@@ -592,6 +636,8 @@ int vfs_stat(vfs_node_t *cwd, const char *path, vfs_stat_t *out) {
     out->modified = node->modified;
     out->type = node->type;
     out->readonly = node->readonly;
+    out->uid = node->uid;
+    out->mode = node->mode;
     return 0;
 }
 

@@ -16,3 +16,17 @@ IPC access control, added without new call numbers:
   owner may poll. Callers must pass `rsi = 0` for a plain poll.
 - `SYS_MSG_OPEN`: names under `/proc/<pid>/` can only be created by
   process `<pid>`; anyone may open an existing queue to send to it.
+
+File ownership (Shusha, no new numbers):
+
+- `SYS_STAT`: `vfs_stat_t` gained `uint32_t uid` and `uint16_t mode`
+  appended after `readonly` (append-only; callers must pass the larger
+  struct).
+- File syscalls check Unix-style owner/other `rwx` bits against the
+  caller's uid (root, uid 0, may do anything except write the read-only
+  image): read/read_at need `r`, write/create/mkdir need `w` on the file
+  or its parent directory, list_dir needs `r`, chdir needs `x`.
+- Control files, used through `SYS_VFS_WRITE`/`SYS_VFS_READ`:
+  `/dev/setuid` (write "<uid>"; root may pick any uid, others only their
+  own; reading returns the caller's uid), `/dev/chmod` ("<octal> <path>",
+  owner or root), `/dev/chown` ("<uid> <path>", root only).

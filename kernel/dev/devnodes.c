@@ -296,6 +296,18 @@ int dev_is_random(vfs_node_t *node) {
     return node && node == dev_random_node;
 }
 
+/* ---- identity / permission control files ----
+ * Writes are served by syscall.c (sys_vfs_write); reading /dev/setuid
+ * returns the caller's uid. */
+static vfs_node_t *dev_control_nodes[3];
+
+int dev_control_kind(vfs_node_t *node) {
+    for (int i = 0; i < 3; i++) {
+        if (node && node == dev_control_nodes[i]) return i + 1;
+    }
+    return DEV_CTL_NONE;
+}
+
 /* ---- population ---- */
 
 int dev_populate(void) {
@@ -335,6 +347,17 @@ int dev_populate(void) {
         }
     }
     dev_random_node = vfs_resolve(vfs_root(), "/dev/random");
+    {
+        static const char *const names[3] = { "/dev/setuid", "/dev/chmod", "/dev/chown" };
+        for (int i = 0; i < 3; i++) {
+            if (!vfs_resolve(vfs_root(), names[i]) && vfs_create(vfs_root(), names[i]) != 0) {
+                rc = -1;
+            }
+            dev_control_nodes[i] = vfs_resolve(vfs_root(), names[i]);
+            /* everyone may use them; the syscall layer decides what is allowed */
+            vfs_node_set_mode(dev_control_nodes[i], 0666);
+        }
+    }
     if (devops_register("/dev/console", &dev_console_calls) != 0) {
         rc = -1;
     }

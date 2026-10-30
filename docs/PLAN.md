@@ -83,7 +83,7 @@ Each phase has an exit test that must pass in QEMU before the next one starts.
 | Phase | State |
 |---|---|
 | 0. Groundwork | Done. Kernel/drivers imported from ICDA (only the kernel; userspace is new). New build, initramfs manifest, init, shell. |
-| 1. Kernel security | Partly done. CSPRNG + `/dev/random`; TLS/session-token randomness fixed; crypto library complete for the design: ChaCha20-Poly1305, XChaCha20-Poly1305, SHA-2, SHA-3/SHAKE, BLAKE2b, HMAC, HKDF, Argon2id, Ed25519, X25519, ML-KEM-768 and the hybrid key wrap, 245 test-vector checks. Still to do: uid enforcement, VFS owner/mode, listening sockets. |
+| 1. Kernel security | Partly done. CSPRNG + `/dev/random`; TLS/session-token randomness fixed; crypto library complete for the design: ChaCha20-Poly1305, XChaCha20-Poly1305, SHA-2, SHA-3/SHAKE, BLAKE2b, HMAC, HKDF, Argon2id, Ed25519, X25519, ML-KEM-768 and the hybrid key wrap, 245 test-vector checks. Files and directories have owners and rwx modes enforced by the file syscalls; `/dev/setuid`, `/dev/chmod`, `/dev/chown`; `fscheck` (21 checks) in the image. Still to do: listening sockets. |
 | UI | New compositor (`wm`), client library, Explorer and Terminal ported from ICDA. |
 
 ### Gaps found while building
@@ -91,6 +91,7 @@ Each phase has an exit test that must pass in QEMU before the next one starts.
 - **Shared memory and message queues had no access control** (any process could map any window buffer or read any queue). Fixed: SHM handles are unguessable capabilities, only a queue's owner can receive from it, `/proc/<pid>/` queue names are reserved for that pid, and messages carry a kernel-stamped sender pid that the WM and apps check. `ipccheck` (in the image) tries these attacks.
 - **Message queues were never freed** (close is a stub in the frozen ABI). Shusha now reclaims queues whose creating process has exited.
 - **ICDA's USB stack is missing upstream.** `kernel.c` referenced `drivers/usb/xhci.*` and `memory/dma.*`, which were never committed to ICDA; USB init is removed until those sources exist.
+- **Ownership limits (for now):** owners and modes are not yet saved by the on-disk persistence layer (live sessions only); the Linux-personality fd syscalls and program execution are not permission-checked yet; until the login service exists, the desktop runs as root.
 - **Display mode** follows whatever GRUB sets (800x600 in QEMU), by ICDA's design for monitor compatibility.
 
 ## Decisions
