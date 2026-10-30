@@ -361,3 +361,59 @@ int sc_ed25519_verify(const uint8_t sig[64], const uint8_t *m, size_t len,
 
     return sc_equal(sig, t, 32) ? 0 : -1;
 }
+
+/* ---- X25519 (RFC 7748), Montgomery ladder on the same field code ---- */
+
+void sc_x25519(uint8_t out[32], const uint8_t scalar[32], const uint8_t point[32]) {
+    static const gf a24 = {0xdb41, 1}; /* 121665 */
+    uint8_t z[32];
+    gf x, a, b, c, d, e, f;
+
+    for (int i = 0; i < 32; i++) z[i] = scalar[i];
+    z[31] = (uint8_t)((scalar[31] & 127) | 64);
+    z[0] &= 248;
+    unpack25519(x, point);
+    for (int i = 0; i < 16; i++) {
+        b[i] = x[i];
+        d[i] = a[i] = c[i] = 0;
+    }
+    a[0] = d[0] = 1;
+    for (int i = 254; i >= 0; i--) {
+        int64_t r = (z[i >> 3] >> (i & 7)) & 1;
+        sel25519(a, b, r);
+        sel25519(c, d, r);
+        A(e, a, c);
+        Z(a, a, c);
+        A(c, b, d);
+        Z(b, b, d);
+        S(d, e);
+        S(f, a);
+        M(a, c, a);
+        M(c, b, e);
+        A(e, a, c);
+        Z(a, a, c);
+        S(b, a);
+        Z(c, d, f);
+        M(a, c, a24);
+        A(a, a, d);
+        M(c, c, a);
+        M(a, d, f);
+        M(d, b, x);
+        S(b, e);
+        sel25519(a, b, r);
+        sel25519(c, d, r);
+    }
+    inv25519(c, c);
+    M(a, a, c);
+    pack25519(out, a);
+    sc_wipe(z, sizeof(z));
+    sc_wipe(a, sizeof(a));
+    sc_wipe(b, sizeof(b));
+    sc_wipe(c, sizeof(c));
+    sc_wipe(d, sizeof(d));
+}
+
+void sc_x25519_base(uint8_t out[32], const uint8_t scalar[32]) {
+    static const uint8_t nine[32] = {9};
+    sc_x25519(out, scalar, nine);
+}

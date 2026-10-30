@@ -4,7 +4,13 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <stdlib.h>
 #include "aead.h"
+#include "argon2.h"
+#include "blake2b.h"
+#include "keccak.h"
+#include "mlkem.h"
+#include "wrap.h"
 #include "chacha20.h"
 #include "drbg.h"
 #include "ed25519.h"
@@ -208,8 +214,150 @@ static void test_drbg(void) {
     check(memcmp(y, z, sizeof(y)) != 0, "drbg reseed changes stream");
 }
 
+static void test_keccak_blake2b(void) {
+    unsigned char out[64];
+    char name[64];
+    for (unsigned i = 0; i < N(k_vecs); i++) {
+        const k_vec_t *v = &k_vecs[i];
+        sc_sha3_256(v->msg, v->len, out);
+        snprintf(name, sizeof(name), "sha3-256 len=%u", v->len);
+        check(memcmp(out, v->sha3_256, 32) == 0, name);
+        sc_sha3_512(v->msg, v->len, out);
+        snprintf(name, sizeof(name), "sha3-512 len=%u", v->len);
+        check(memcmp(out, v->sha3_512, 64) == 0, name);
+        sc_shake128(v->msg, v->len, out, 64);
+        snprintf(name, sizeof(name), "shake128 len=%u", v->len);
+        check(memcmp(out, v->shake128, 64) == 0, name);
+        sc_shake256(v->msg, v->len, out, 64);
+        snprintf(name, sizeof(name), "shake256 len=%u", v->len);
+        check(memcmp(out, v->shake256, 64) == 0, name);
+        sc_blake2b(out, 64, 0, 0, v->msg, v->len);
+        snprintf(name, sizeof(name), "blake2b len=%u", v->len);
+        check(memcmp(out, v->b2b, 64) == 0, name);
+        sc_blake2b(out, 32, b2b_key, 32, v->msg, v->len);
+        snprintf(name, sizeof(name), "blake2b keyed len=%u", v->len);
+        check(memcmp(out, v->b2b_keyed, 32) == 0, name);
+    }
+}
+
+static void test_argon2(void) {
+    unsigned char out[64], pwd[32], salt[16], secret[8], ad[12], exp[32];
+    char name[64];
+    void *mem;
+
+    /* RFC 9106 5.3: Argon2id, 4 lanes, with secret and associated data */
+    memset(pwd, 1, 32);
+    memset(salt, 2, 16);
+    memset(secret, 3, 8);
+    memset(ad, 4, 12);
+    unhex(exp, "0d640df58d78766c08c037a34a8b53c9d01ef0452d75b65eb52520e96b01e659");
+    mem = malloc(sc_argon2_mem_bytes(32, 4));
+    sc_argon2id(out, 32, pwd, 32, salt, 16, secret, 8, ad, 12, 3, 32, 4, mem);
+    free(mem);
+    check(memcmp(out, exp, 32) == 0, "rfc9106 argon2id");
+
+    for (unsigned i = 0; i < N(a2_vecs); i++) {
+        const a2_vec_t *v = &a2_vecs[i];
+        mem = malloc(sc_argon2_mem_bytes(v->m_kib, 1));
+        sc_argon2id(out, v->outlen, (const unsigned char *)v->pwd, (unsigned)strlen(v->pwd), v->salt, 16,
+                    0, 0, 0, 0, v->t, v->m_kib, 1, mem);
+        free(mem);
+        snprintf(name, sizeof(name), "argon2id t=%u m=%uKiB", v->t, v->m_kib);
+        check(memcmp(out, v->out, v->outlen) == 0, name);
+    }
+}
+
+static void test_x25519(void) {
+    unsigned char k[32], u[32], out[32], exp[32];
+    char name[64];
+    /* RFC 7748 5.2 and 6.1 */
+    unhex(k, "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4");
+    unhex(u, "e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c");
+    unhex(exp, "c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552");
+    sc_x25519(out, k, u);
+    check(memcmp(out, exp, 32) == 0, "rfc7748 x25519 5.2");
+    unhex(k, "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a");
+    unhex(exp, "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a");
+    sc_x25519_base(out, k);
+    check(memcmp(out, exp, 32) == 0, "rfc7748 x25519 6.1 public key");
+    for (unsigned i = 0; i < N(x25519_vecs); i++) {
+        const x_vec_t *v = &x25519_vecs[i];
+        sc_x25519_base(out, v->a);
+        snprintf(name, sizeof(name), "x25519 public key #%u", i);
+        check(memcmp(out, v->a_pub, 32) == 0, name);
+        sc_x25519(out, v->a, v->b_pub);
+        snprintf(name, sizeof(name), "x25519 shared secret #%u", i);
+        check(memcmp(out, v->shared, 32) == 0, name);
+    }
+}
+
+static unsigned char ek[SC_MLKEM_EK], dk[SC_MLKEM_DK];
+
+static void test_mlkem(void) {
+    unsigned char h[32], ss[32], ss2[32], ct[SC_MLKEM_CT], m[32];
+    char name[64];
+    for (unsigned i = 0; i < N(mlkem_vecs); i++) {
+        const mlkem_vec_t *v = &mlkem_vecs[i];
+        sc_mlkem768_keygen(ek, dk, v->seed);
+        sc_sha3_256(ek, SC_MLKEM_EK, h);
+        snprintf(name, sizeof(name), "ml-kem-768 keygen #%u", i);
+        check(memcmp(h, v->ek_sha3, 32) == 0, name);
+        sc_mlkem768_decaps(ss, v->ct, dk);
+        snprintf(name, sizeof(name), "ml-kem-768 decaps reference ct #%u", i);
+        check(memcmp(ss, v->ss, 32) == 0, name);
+        memset(m, (int)i + 1, 32);
+        check(sc_mlkem768_encaps(ct, ss, ek, m) == 0, "ml-kem-768 encaps");
+        sc_mlkem768_decaps(ss2, ct, dk);
+        snprintf(name, sizeof(name), "ml-kem-768 round trip #%u", i);
+        check(memcmp(ss, ss2, 32) == 0, name);
+        ct[17] ^= 4;
+        sc_mlkem768_decaps(ss2, ct, dk);
+        snprintf(name, sizeof(name), "ml-kem-768 implicit rejection #%u", i);
+        check(memcmp(ss, ss2, 32) != 0, name);
+    }
+    ek[0] = 0xff;
+    ek[1] |= 0x0f; /* coefficient 4095 >= q */
+    check(sc_mlkem768_encaps(ct, ss, ek, m) == -1, "ml-kem-768 rejects non-canonical ek");
+}
+
+static sc_wrap_pub_t alice_pub, bob_pub;
+static sc_wrap_priv_t alice, bob;
+
+static void test_wrap(void) {
+    unsigned char seed[96], rnd[SC_WRAP_RANDOM], key[32], got[32], box[SC_WRAP_BOX];
+    static const char purpose[] = "fk:file-0001:epoch-1";
+    for (int i = 0; i < 96; i++) seed[i] = (unsigned char)(i * 3 + 1);
+    sc_wrap_keypair(&alice_pub, &alice, seed);
+    seed[0] ^= 1;
+    seed[40] ^= 1;
+    sc_wrap_keypair(&bob_pub, &bob, seed);
+    for (int i = 0; i < SC_WRAP_RANDOM; i++) rnd[i] = (unsigned char)(i * 5 + 7);
+    for (int i = 0; i < 32; i++) key[i] = (unsigned char)(0xa0 + i);
+
+    check(sc_wrap(box, &alice_pub, key, (const unsigned char *)purpose, sizeof(purpose) - 1, rnd) == 0, "wrap");
+    check(sc_unwrap(got, box, &alice_pub, &alice, (const unsigned char *)purpose, sizeof(purpose) - 1) == 0 &&
+          memcmp(got, key, 32) == 0, "unwrap round trip");
+    check(sc_unwrap(got, box, &bob_pub, &bob, (const unsigned char *)purpose, sizeof(purpose) - 1) == -1,
+          "unwrap rejects the wrong recipient");
+    check(sc_unwrap(got, box, &alice_pub, &alice, (const unsigned char *)"fk:file-0002:epoch-1", 20) == -1,
+          "unwrap rejects a different purpose");
+    for (int pos = 0; pos < SC_WRAP_BOX; pos += 97) {
+        box[pos] ^= 0x20;
+        if (sc_unwrap(got, box, &alice_pub, &alice, (const unsigned char *)purpose, sizeof(purpose) - 1) == 0) {
+            check(0, "unwrap rejects a tampered box");
+        }
+        box[pos] ^= 0x20;
+    }
+    check(1, "unwrap rejects a tampered box (13 positions)");
+}
+
 int main(void) {
     test_rfc();
+    test_keccak_blake2b();
+    test_argon2();
+    test_x25519();
+    test_mlkem();
+    test_wrap();
     test_hashes();
     test_aead(ietf_vecs, N(ietf_vecs), 0);
     test_aead(x_vecs, N(x_vecs), 1);

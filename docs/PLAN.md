@@ -83,7 +83,7 @@ Each phase has an exit test that must pass in QEMU before the next one starts.
 | Phase | State |
 |---|---|
 | 0. Groundwork | Done. Kernel/drivers imported from ICDA (only the kernel; userspace is new). New build, initramfs manifest, init, shell. |
-| 1. Kernel security | Partly done. CSPRNG + `/dev/random`; TLS/session-token randomness fixed; crypto library (ChaCha20-Poly1305, XChaCha20-Poly1305, SHA-2, HMAC, HKDF, Ed25519, DRBG) with 143 test-vector checks. Still to do: uid enforcement, VFS owner/mode, ML-KEM, Argon2id, listening sockets. |
+| 1. Kernel security | Partly done. CSPRNG + `/dev/random`; TLS/session-token randomness fixed; crypto library complete for the design: ChaCha20-Poly1305, XChaCha20-Poly1305, SHA-2, SHA-3/SHAKE, BLAKE2b, HMAC, HKDF, Argon2id, Ed25519, X25519, ML-KEM-768 and the hybrid key wrap, 245 test-vector checks. Still to do: uid enforcement, VFS owner/mode, listening sockets. |
 | UI | New compositor (`wm`), client library, Explorer and Terminal ported from ICDA. |
 
 ### Gaps found while building

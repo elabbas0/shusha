@@ -93,3 +93,50 @@ for i, ml in enumerate(EL):
     sk = nacl.signing.SigningKey(seed)
     print("  {%d, %s, %s, edm%d, %s}," % (ml, c(seed), c(bytes(sk.verify_key)), i, c(sk.sign(m).signature)))
 print("};")
+
+# ---- SHA-3 / SHAKE / BLAKE2b (hashlib) ----
+print("typedef struct { unsigned len; const unsigned char *msg; const unsigned char sha3_256[32], sha3_512[64], shake128[64], shake256[64], b2b[64], b2b_keyed[32]; } k_vec_t;")
+KL = [0, 1, 71, 72, 135, 136, 137, 167, 168, 169, 500]
+for i, n in enumerate(KL):
+    print("static const unsigned char kmsg%d[] = %s;" % (i, c(det(n, b"k%d" % i))))
+print("static const unsigned char b2b_key[32] = %s;" % c(det(32, b"b2key")))
+print("static const k_vec_t k_vecs[] = {")
+for i, n in enumerate(KL):
+    m = det(n, b"k%d" % i)
+    print("  {%d, kmsg%d, %s, %s, %s, %s, %s, %s}," % (n, i, c(hashlib.sha3_256(m).digest()), c(hashlib.sha3_512(m).digest()),
+          c(hashlib.shake_128(m).digest(64)), c(hashlib.shake_256(m).digest(64)), c(hashlib.blake2b(m).digest()),
+          c(hashlib.blake2b(m, key=det(32, b"b2key"), digest_size=32).digest())))
+print("};")
+
+# ---- Argon2id (libsodium: one lane, no secret/AD) ----
+print("typedef struct { unsigned t, m_kib, outlen; const char *pwd; const unsigned char salt[16]; const unsigned char out[64]; } a2_vec_t;")
+print("static const a2_vec_t a2_vecs[] = {")
+for i, (t, m, ol) in enumerate([(1, 8, 32), (2, 64, 16), (3, 256, 64), (2, 1024, 40)]):
+    pwd, salt = "shusha password %d" % i, det(16, b"a2salt%d" % i)
+    out = nb.crypto_pwhash_alg(ol, pwd.encode(), salt, t, m * 1024, nb.crypto_pwhash_ALG_ARGON2ID13)
+    print('  {%d, %d, %d, "%s", %s, %s},' % (t, m, ol, pwd, c(salt), c(out)))
+print("};")
+
+# ---- X25519 (pyca/cryptography) ----
+from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+from cryptography.hazmat.primitives import serialization as ser
+raw = dict(encoding=ser.Encoding.Raw, format=ser.PublicFormat.Raw)
+print("typedef struct { const unsigned char a[32], b_pub[32], a_pub[32], shared[32]; } x_vec_t;")
+print("static const x_vec_t x25519_vecs[] = {")
+for i in range(4):
+    a = X25519PrivateKey.from_private_bytes(det(32, b"xa%d" % i))
+    b = X25519PrivateKey.from_private_bytes(det(32, b"xb%d" % i))
+    print("  {%s, %s, %s, %s}," % (c(det(32, b"xa%d" % i)), c(b.public_key().public_bytes(**raw)),
+          c(a.public_key().public_bytes(**raw)), c(a.exchange(b.public_key()))))
+print("};")
+
+# ---- ML-KEM-768 (pyca/cryptography) ----
+from cryptography.hazmat.primitives.asymmetric import mlkem
+print("typedef struct { const unsigned char seed[64], ek_sha3[32], ct[1088], ss[32]; } mlkem_vec_t;")
+print("static const mlkem_vec_t mlkem_vecs[] = {")
+for i in range(3):
+    seed = det(64, b"mlkem%d" % i)
+    sk = mlkem.MLKEM768PrivateKey.from_seed_bytes(seed)
+    ss, ct = sk.public_key().encapsulate()
+    print("  {%s, %s, %s, %s}," % (c(seed), c(hashlib.sha3_256(sk.public_key().public_bytes_raw()).digest()), c(ct), c(ss)))
+print("};")
