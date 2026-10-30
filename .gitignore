@@ -57,3 +57,4 @@ dkms.conf
 # Shusha build output
 build/
 shusha.iso
+__pycache__/
