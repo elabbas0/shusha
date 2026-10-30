@@ -25,6 +25,7 @@
 #include "fs/fat32.h"
 #include "fs/exfat.h"
 #include "fs/initramfs.h"
+#include "crypto/random.h"
 #include "fs/install.h"
 #include "fs/ntfs.h"
 #include "fs/persistfs.h"
@@ -268,6 +269,17 @@ void kernel_main(void *multiboot_info) {
     sched_init();
     bootstage_set(10, "sched");
     boot_line("scheduler", "scheduler core online");
+
+    {
+        uint32_t src = random_init();
+        if (src & (RANDOM_SRC_RDSEED | RANDOM_SRC_RDRAND)) {
+            boot_line("csprng", (src & RANDOM_SRC_RDSEED)
+                                    ? "seeded from rdseed + rdrand + timing jitter"
+                                    : "seeded from rdrand + timing jitter");
+        } else {
+            boot_line("csprng", "WARNING: no hardware RNG, seeded from timing jitter only");
+        }
+    }
 
     irq_register(0, timer_handler);
     boot_line("timer", "irq0 handler registered");

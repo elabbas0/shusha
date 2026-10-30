@@ -9,7 +9,7 @@ mkdir -p "$(dirname "$log")"
 rm -f "$log"
 
 set +e
-timeout --foreground "$seconds" qemu-system-x86_64 \
+timeout --foreground "$seconds" qemu-system-x86_64 -cpu max \
     -cdrom "$iso" -m 256M -serial "file:$log" \
     -display none -monitor none -no-reboot -no-shutdown
 status=$?

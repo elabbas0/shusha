@@ -1,3 +1,4 @@
+#include "../crypto/random.h"
 #include "user.h"
 #include "elf.h"
 
@@ -654,7 +655,11 @@ static int user_spawn_pathv_depth(const char *path, uint64_t extra_argc, char *c
     if (cstr_eq(path, "/sbin/init.app")) {
         user_proc->ex_uid = 0;
         user_proc->ex_session_leader = 1;
-        user_proc->ex_token = sched_ticks() ? (uint64_t)sched_ticks() : 1;
+        /* Session tokens must not be guessable: draw from the CSPRNG. */
+        if (random_get(&user_proc->ex_token, sizeof(user_proc->ex_token)) != 0 ||
+            user_proc->ex_token == 0) {
+            user_proc->ex_token = 1;
+        }
     }
 
     user_proc->state = PROCESS_READY;

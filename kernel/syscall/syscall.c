@@ -25,6 +25,7 @@
 #include "../memory/vmm.h"
 #include "../fs/fd.h"
 #include "../dev/devops.h"
+#include "../crypto/random.h"
 #include "uaccess.h"
 #include "native_abi.h"
 
@@ -171,6 +172,22 @@ static int gate_path_ok(const char *path) {
     return strnlen_user(path, 511) != (uint64_t)-1;
 }
 
+/* /dev/random: fill the (already validated) user buffer from the CSPRNG.
+ * Returns the byte count, or -1 if `path` is not /dev/random. */
+#define DEV_RANDOM_MAX 4096
+static long read_dev_random(process_t *proc, const char *path, char *buf, uint64_t cap) {
+    if (!dev_is_random(vfs_resolve(proc->cwd ? proc->cwd : vfs_root(), path))) {
+        return -1;
+    }
+    if (cap > DEV_RANDOM_MAX) {
+        cap = DEV_RANDOM_MAX;
+    }
+    if (random_get(buf, cap) != 0) {
+        return 0;
+    }
+    return (long)cap;
+}
+
 static uint64_t sys_vfs_read(const char *path, char *buf, uint64_t cap) {
     process_t *proc = sched_current_process();
     uint64_t size = 0;
@@ -184,6 +201,15 @@ static uint64_t sys_vfs_read(const char *path, char *buf, uint64_t cap) {
     }
     if (!user_range_prepare_cur_w(buf, cap)) {
         return (uint64_t)-U_EFAULT;
+    }
+
+    {
+        /* Text-style read: leave room for the terminator. */
+        long n = read_dev_random(proc, path, buf, cap - 1);
+        if (n >= 0) {
+            buf[n] = '\0';
+            return (uint64_t)n;
+        }
     }
 
     data = vfs_read(proc->cwd ? proc->cwd : vfs_root(), path, &size);
@@ -239,6 +265,13 @@ static uint64_t sys_vfs_read_at(const char *path, uint64_t offset, char *buf, ui
     }
     if (!user_range_prepare_cur_w(buf, cap)) {
         return (uint64_t)-U_EFAULT;
+    }
+
+    {
+        long n = read_dev_random(proc, path, buf, cap);
+        if (n >= 0) {
+            return (uint64_t)n;
+        }
     }
 
     data = vfs_read(proc->cwd ? proc->cwd : vfs_root(), path, &size);

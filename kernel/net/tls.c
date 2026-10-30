@@ -1,3 +1,4 @@
+#include "../crypto/random.h"
 #include "tls.h"
 #include "net.h"
 #include "crypto/sha256.h"
@@ -595,9 +596,9 @@ static int tls_send_record(tls_conn_t *conn, uint8_t type, const uint8_t *data, 
 
         uint8_t *body = frame + sizeof(tls_record_hdr_t);
         uint8_t iv[AES_BLOCK_SIZE];
-        uint32_t rseed = (uint32_t)(conn->seq_out + sched_ticks());
+        /* CBC needs an unpredictable IV per record. */
+        (void)random_get(iv, AES_BLOCK_SIZE);
         for (int i = 0; i < AES_BLOCK_SIZE; i++) {
-            iv[i] = (uint8_t)(rseed + i * 13);
             body[i] = iv[i];
         }
         aes128_cbc_encrypt(conn->client_enc_expanded, iv, plaintext, pt_len, body + 16);
@@ -876,9 +877,9 @@ int tls_connect(tls_conn_t **conn_out, uint32_t ip, uint16_t port, const char *s
 
     /* x25519 keypair for a possible TLS 1.3 handshake (generated up front so
      * the key share can go into the ClientHello). */
-    uint32_t rand_seed = sched_ticks();
-    for (int i = 0; i < 32; i++) {
-        conn->x25519_priv[i] = (uint8_t)(rand_seed + i * 29 + (sched_ticks() & 0xFF) + i * i);
+    if (random_get(conn->x25519_priv, sizeof(conn->x25519_priv)) != 0) {
+        kfree(conn);
+        return -1;
     }
     uint8_t x25519_pub[32];
     x25519_public(x25519_pub, conn->x25519_priv);
@@ -889,15 +890,14 @@ int tls_connect(tls_conn_t **conn_out, uint32_t ip, uint16_t port, const char *s
     ch[ch_len++] = TLS_VERSION_MAJOR;
     ch[ch_len++] = TLS_VERSION_MINOR;
 
+    (void)random_get(conn->client_random, sizeof(conn->client_random));
     for (int i = 0; i < 32; i++) {
-        conn->client_random[i] = (uint8_t)(rand_seed + i * 17 + (sched_ticks() & 0xFF));
         ch[ch_len++] = conn->client_random[i];
     }
     /* 32-byte legacy session id (TLS 1.3 middlebox compatibility mode) */
     ch[ch_len++] = 32;
-    for (int i = 0; i < 32; i++) {
-        ch[ch_len++] = (uint8_t)(rand_seed + i * 7 + 0xA5);
-    }
+    (void)random_get(ch + ch_len, 32);
+    ch_len += 32;
     /* cipher suites: TLS 1.3 GCM first, then the legacy TLS 1.2 RSA suites */
     ch[ch_len++] = 0;
     ch[ch_len++] = 8;
@@ -1174,9 +1174,10 @@ int tls_connect(tls_conn_t **conn_out, uint32_t ip, uint16_t port, const char *s
 
     conn->pre_master_secret[0] = TLS_VERSION_MAJOR;
     conn->pre_master_secret[1] = TLS_VERSION_MINOR;
-    uint32_t rseed = sched_ticks();
-    for (int i = 2; i < 48; i++) {
-        conn->pre_master_secret[i] = (uint8_t)(rseed + i * 31 + (sched_ticks() & 0xFF));
+    if (random_get(conn->pre_master_secret + 2, 46) != 0) {
+        kfree(payload);
+        kfree(conn);
+        return -1;
     }
 
     int mod_bytes = 0;

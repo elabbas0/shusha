@@ -5,6 +5,8 @@ CC    ?= gcc
 ASM   ?= nasm
 LD    ?= ld
 QEMU  ?= qemu-system-x86_64
+# -cpu max exposes RDRAND/RDSEED under TCG so the CSPRNG gets a hardware source
+QEMU_FLAGS ?= -cpu max -m 256M
 # 1 = mirror the user console to serial (used by the smoke test)
 SERIAL_MIRROR ?= 0
 B     := build
@@ -12,12 +14,12 @@ B     := build
 KCFLAGS := -ffreestanding -O0 -Wall -Wextra -fno-exceptions -fno-pie -no-pie \
            -fno-asynchronous-unwind-tables -Ikernel -I. -Icrypto -fno-stack-protector \
            -mno-mmx -mno-sse -mno-sse2 -mno-red-zone \
-           -DSERIAL_SHELL_MIRROR=$(SERIAL_MIRROR) -DCI_SELFTEST=0 -DCI_IMAGE=0 -DSERIAL_VERBOSE=0 \
+           -DSERIAL_SHELL_MIRROR=$(SERIAL_MIRROR) -DCI_SELFTEST=0 -DCI_IMAGE=0 -DSERIAL_VERBOSE=0 -DSC_FREESTANDING \
            -MMD -MP
 
 UCFLAGS := -ffreestanding -O2 -Wall -Wextra -fno-pie -no-pie -mcmodel=large \
            -fno-asynchronous-unwind-tables -fno-stack-protector \
-           -mno-mmx -mno-sse -mno-sse2 -nostdlib -Iuser/include -Icrypto \
+           -mno-mmx -mno-sse -mno-sse2 -nostdlib -Iuser/include -Icrypto -DSC_FREESTANDING \
            -MMD -MP
 
 # ---- kernel -----------------------------------------------------------------
@@ -89,10 +91,10 @@ shusha.iso: $(B)/kernel.bin boot/grub/grub.cfg
 # ---- run / test -------------------------------------------------------------
 
 qemu: shusha.iso
-	$(QEMU) -cdrom $< -m 256M -serial stdio -no-reboot
+	$(QEMU) $(QEMU_FLAGS) -cdrom $< -serial stdio -no-reboot
 
 qemu-headless: shusha.iso
-	$(QEMU) -cdrom $< -m 256M -serial stdio -display none -monitor none -no-reboot
+	$(QEMU) $(QEMU_FLAGS) -cdrom $< -serial stdio -display none -monitor none -no-reboot
 
 qemu-smoke:
 	$(MAKE) clean

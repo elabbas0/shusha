@@ -286,6 +286,16 @@ static const dev_calls_t dev_fb_calls = {
     dev_gpu_set_cursor,
 };
 
+/* ---- /dev/random (kernel CSPRNG) ----
+ * Reads are served by syscall.c through dev_is_random(); the node only
+ * gives the path an identity in the VFS. */
+
+static vfs_node_t *dev_random_node;
+
+int dev_is_random(vfs_node_t *node) {
+    return node && node == dev_random_node;
+}
+
 /* ---- population ---- */
 
 int dev_populate(void) {
@@ -319,6 +329,12 @@ int dev_populate(void) {
             rc = -1;
         }
     }
+    if (!vfs_resolve(vfs_root(), "/dev/random")) {
+        if (vfs_create(vfs_root(), "/dev/random") != 0) {
+            rc = -1;
+        }
+    }
+    dev_random_node = vfs_resolve(vfs_root(), "/dev/random");
     if (devops_register("/dev/console", &dev_console_calls) != 0) {
         rc = -1;
     }

@@ -67,6 +67,11 @@ static inline const dev_calls_t *dev_fb(void) {
     return (d && d->fb_claim_map) ? d : 0;
 }
 
+struct vfs_node;
+
+/* 1 if `node` is /dev/random (served from the kernel CSPRNG). */
+int dev_is_random(struct vfs_node *node);
+
 /* Create /dev + nodes and register the three tables. Idempotent:
  * safe to call when a persistfs replay already recreated /dev.
  * Returns 0 normally; nonzero is log-only for the caller. */
