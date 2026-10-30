@@ -34,9 +34,9 @@ KERNEL_OBJ := $(KERNEL_C:%.c=$(B)/k/%.o) $(KERNEL_ASM:%.asm=$(B)/k/%.asm.o) $(B)
 # Each program: user/<dir>/<name>.c -> $(B)/user/<name>.app
 # USERPROGS maps the path inside the system to the built file.
 
-ULIB_OBJ := $(B)/u/lib/crt0.asm.o $(B)/u/lib/lib.o $(B)/u/crypto/mem.o
+ULIB_OBJ := $(B)/u/lib/crt0.asm.o $(B)/u/lib/lib.o $(B)/u/lib/net.o $(B)/u/crypto/mem.o
 UGUI_OBJ := $(B)/u/lib/ui.o $(B)/u/lib/draw.o
-UPROGS   := init shell wm explorer terminal ipccheck fscheck
+UPROGS   := init shell wm explorer terminal ipccheck fscheck lanping
 
 USERPROGS := /sbin/init.app=$(B)/user/init.app \
              /apps/shell.app=$(B)/user/shell.app \
@@ -44,7 +44,8 @@ USERPROGS := /sbin/init.app=$(B)/user/init.app \
              /apps/explorer.app=$(B)/user/explorer.app \
              /apps/terminal.app=$(B)/user/terminal.app \
              /apps/ipccheck.app=$(B)/user/ipccheck.app \
-             /apps/fscheck.app=$(B)/user/fscheck.app
+             /apps/fscheck.app=$(B)/user/fscheck.app \
+             /apps/lanping.app=$(B)/user/lanping.app
 
 UAPPS := $(UPROGS:%=$(B)/user/%.app)
 
@@ -90,6 +91,7 @@ $(B)/user/explorer.app: $(B)/u/apps/explorer.o $(UGUI_OBJ) $(ULIB_OBJ)
 $(B)/user/terminal.app: $(B)/u/apps/terminal.o $(UGUI_OBJ) $(ULIB_OBJ)
 $(B)/user/ipccheck.app: $(B)/u/tests/ipccheck.o $(ULIB_OBJ)
 $(B)/user/fscheck.app: $(B)/u/tests/fscheck.o $(ULIB_OBJ)
+$(B)/user/lanping.app: $(B)/u/tests/lanping.o $(ULIB_OBJ)
 
 $(UAPPS): user/lib/user.ld
 	@mkdir -p $(dir $@)
@@ -123,6 +125,15 @@ qemu: shusha.iso
 qemu-headless: shusha.iso
 	$(QEMU) $(QEMU_FLAGS) -cdrom $< -serial stdio -display none -monitor none -no-reboot
 
+# ISO for the multi-machine LAN tests: boots to the text shell so each
+# VM's output can be read from its serial log (scripts/lan.py).
+lan.iso: $(B)/kernel.bin boot/grub/grub.cfg
+	rm -rf $(B)/lan-iso && mkdir -p $(B)/lan-iso/boot/grub
+	cp $(B)/kernel.bin $(B)/lan-iso/boot/kernel.bin
+	sed 's|multiboot2 /boot/kernel.bin icda.live=1|multiboot2 /boot/kernel.bin icda.live=1 shusha.text|' \
+	    boot/grub/grub.cfg > $(B)/lan-iso/boot/grub/grub.cfg
+	grub-mkrescue -o $@ $(B)/lan-iso 2>/dev/null
+
 qemu-smoke:
 	$(MAKE) clean
 	$(MAKE) SERIAL_MIRROR=1 shusha.iso
@@ -136,6 +147,6 @@ test:
 	$(B)/test/crypto_test
 
 clean:
-	rm -rf $(B) shusha.iso
+	rm -rf $(B) shusha.iso lan.iso
 
 -include $(shell find $(B) -name '*.d' 2>/dev/null)

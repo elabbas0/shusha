@@ -30,3 +30,16 @@ File ownership (Shusha, no new numbers):
   `/dev/setuid` (write "<uid>"; root may pick any uid, others only their
   own; reading returns the caller's uid), `/dev/chmod` ("<octal> <path>",
   owner or root), `/dev/chown` ("<uid> <path>", root only).
+
+Userspace networking (Shusha, no new numbers):
+
+- `/dev/udp` (see `kernel/net/udp.h`): `SYS_VFS_WRITE` with a binary
+  command - op 1 bind a port, op 2 unbind, op 3 send a datagram
+  (`[op][pad][src port u16][dst port u16][pad u16][dst ip 4][payload]`,
+  ports little-endian, payload <= 1400). `SYS_VFS_READ_AT` at offset 0
+  returns the next datagram for any port the caller bound, prefixed by
+  `[src ip 4][src port u16][dst port u16][len u16][pad u16]`, or 0.
+  Ports are owned by the binding process and freed when it exits.
+- `/dev/netinfo` reads as text: `ip`, `mask`, `mac`.
+- Without a DHCP server the kernel takes a link-local address,
+  169.254.<mac[4]>.<mac[5]>/16.

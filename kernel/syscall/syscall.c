@@ -26,6 +26,7 @@
 #include "../fs/fd.h"
 #include "../dev/devops.h"
 #include "../crypto/random.h"
+#include "../net/udp.h"
 #include "uaccess.h"
 #include "native_abi.h"
 
@@ -233,6 +234,35 @@ static uint64_t control_write(process_t *proc, int kind, const char *buf, uint64
     return (uint64_t)-1;
 }
 
+/* /dev/netinfo: address configuration as text. */
+static long read_netinfo(process_t *proc, const char *path, char *buf, uint64_t cap) {
+    char tmp[128];
+    uint64_t n;
+    if (!dev_is_netinfo(vfs_resolve(cwd_of(proc), path))) return -1;
+    n = net_info_text(tmp, sizeof(tmp));
+    if (n > cap) n = cap;
+    for (uint64_t i = 0; i < n; i++) buf[i] = tmp[i];
+    return (long)n;
+}
+
+/* /dev/udp writes: bind, unbind, send (see kernel/net/udp.h). */
+static uint64_t udp_write(process_t *proc, const uint8_t *buf, uint64_t size) {
+    uint16_t a, b;
+    if (size < 4) return (uint64_t)-1;
+    a = (uint16_t)(buf[2] | (buf[3] << 8));
+    switch (buf[0]) {
+    case UDP_OP_BIND:
+        return udp_bind(proc->pid, a) == 0 ? size : (uint64_t)-1;
+    case UDP_OP_UNBIND:
+        return udp_unbind(proc->pid, a) == 0 ? size : (uint64_t)-1;
+    case UDP_OP_SEND:
+        if (size < 12 || size - 12 > UDP_MAX_PAYLOAD) return (uint64_t)-1;
+        b = (uint16_t)(buf[4] | (buf[5] << 8));
+        return udp_send(proc->pid, a, buf + 8, b, buf + 12, (uint16_t)(size - 12)) == 0 ? size : (uint64_t)-1;
+    }
+    return (uint64_t)-1;
+}
+
 /* /dev/setuid reads back the caller's uid as text. */
 static long read_dev_uid(process_t *proc, const char *path, char *buf, uint64_t cap) {
     char tmp[16];
@@ -283,6 +313,7 @@ static uint64_t sys_vfs_read(const char *path, char *buf, uint64_t cap) {
         /* Text-style read: leave room for the terminator. */
         long n = read_dev_random(proc, path, buf, cap - 1);
         if (n < 0) n = read_dev_uid(proc, path, buf, cap - 1);
+        if (n < 0) n = read_netinfo(proc, path, buf, cap - 1);
         if (n >= 0) {
             buf[n] = '\0';
             return (uint64_t)n;
@@ -325,6 +356,9 @@ static uint64_t sys_vfs_write(const char *path, const char *buf, uint64_t size) 
     {
         vfs_node_t *node = vfs_resolve(cwd_of(proc), path);
         int kind = dev_control_kind(node);
+        if (dev_is_udp(node)) {
+            return udp_write(proc, (const uint8_t *)buf, size);
+        }
         if (kind != DEV_CTL_NONE) {
             char cmd[192];
             uint64_t n = size < sizeof(cmd) - 1 ? size : sizeof(cmd) - 1;
@@ -370,6 +404,11 @@ static uint64_t sys_vfs_read_at(const char *path, uint64_t offset, char *buf, ui
     {
         long n = read_dev_random(proc, path, buf, cap);
         if (n < 0 && offset == 0) n = read_dev_uid(proc, path, buf, cap);
+        if (n < 0 && offset == 0) n = read_netinfo(proc, path, buf, cap);
+        if (n < 0 && dev_is_udp(vfs_resolve(cwd_of(proc), path))) {
+            n = udp_recv(proc->pid, (uint8_t *)buf, cap);
+            if (n < 0) return (uint64_t)-1;
+        }
         if (n >= 0) {
             return (uint64_t)n;
         }

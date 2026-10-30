@@ -413,7 +413,11 @@ void kernel_main(void *multiboot_info) {
         boot_halt("storage", "initramfs could not populate the live filesystem");
     }
     bootstage_set(17, "initramfs");
-    vt_set_gui_available(initramfs_find("/apps/wm.app") != 0);
+    /* "shusha.text" on the kernel command line boots to the text shell
+     * (used by the multi-machine LAN tests, whose output is read from
+     * the serial log). */
+    vt_set_gui_available(initramfs_find("/apps/wm.app") != 0 &&
+                         !boot_cmdline_has_flag(multiboot_info, "shusha.text"));
     (void)vfs_mkdir(vfs_root(), "/home");
     /* Shared until per-user homes exist; files inside keep their own
      * owners and modes, so users cannot read or change each other's. */

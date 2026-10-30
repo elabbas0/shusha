@@ -216,7 +216,23 @@ static void run_line(char *line) {
               "kernel: ICDA (https://github.com/elabbas0/ICDA)\n");
     } else if (str_eq(c, "poweroff")) (void)sh_power(0);
     else if (str_eq(c, "reboot")) (void)sh_power(1);
-    else err(c, "unknown command (try 'help')");
+    else {
+        /* Any other word runs /apps/<word>.app with the remaining args. */
+        char path[96];
+        sh_stat_t st;
+        str_copy(path, "/apps/", sizeof(path));
+        str_cat(path, c, sizeof(path));
+        str_cat(path, ".app", sizeof(path));
+        if (c[0] != '/' && sh_stat(path, &st) == 0) {
+            char *run_argv[ARGS_MAX + 1];
+            run_argv[0] = "run";
+            run_argv[1] = path;
+            for (int i = 1; i < argc; i++) run_argv[i + 1] = argv[i];
+            cmd_run(argc + 1, run_argv);
+        } else {
+            err(c, "unknown command (try 'help')");
+        }
+    }
 }
 
 int main(void) {

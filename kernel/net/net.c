@@ -1036,10 +1036,14 @@ int net_init(void) {
         net_state.ready = 1;
         net_error = 0;
     } else {
-        /* Fallback to QEMU static config */
-        net_state.ip = NET_LOCAL_IP;
-        net_state.gateway = NET_GATEWAY_IP;
-        net_state.netmask = NET_NETMASK;
+        /* No DHCP server (e.g. a private LAN of Shusha machines): take a
+         * link-local 169.254.x.y address derived from the MAC so every
+         * machine on the segment gets a distinct, predictable one. */
+        uint32_t host = ((uint32_t)net_state.mac[4] << 8) | net_state.mac[5];
+        if (host == 0 || host == 0xffff) host = 1;
+        net_state.ip = 169u | (254u << 8) | ((host >> 8) << 16) | ((host & 0xffu) << 24);
+        net_state.gateway = 0;
+        net_state.netmask = 0x0000ffffu; /* 255.255.0.0 */
         net_state.ready = 1;
         net_error = 0;
     }

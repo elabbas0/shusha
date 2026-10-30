@@ -58,3 +58,4 @@ dkms.conf
 build/
 shusha.iso
 __pycache__/
+lan.iso
