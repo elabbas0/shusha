@@ -159,7 +159,8 @@ static void pf_panic(struct registers *regs, uint64_t cr2) {
 // Conditions that must ALL be true:
 //   1. Not-present fault (P=0) — the page hasn't been mapped yet, not a
 //      protection violation.
-//   2. Write access (W=1) — pushing onto the stack is always a write.
+//   2. Read or write: GCC's stack-clash probes (`orq $0,(%rsp)` after
+//      each 4 KiB `sub rsp`) fault as reads before they write.
 //   3. The faulting address is inside the user stack region
 //      [USER_STACK_LIMIT, USER_STACK_TOP).
 //   4. The faulting page is at most one page below the current RSP page —
@@ -174,7 +175,6 @@ static int is_stack_growth(struct registers *regs, uint64_t cr2) {
     uint64_t e = regs->err_code;
 
     if (e & PF_PRESENT)  return 0;  // protection fault, not missing page
-    if (!(e & PF_WRITE)) return 0;  // read fault can't be stack growth
 
     // must be in the user stack region
     if (cr2 < USER_STACK_LIMIT || cr2 >= USER_STACK_TOP) return 0;
@@ -195,8 +195,9 @@ static int is_stack_growth(struct registers *regs, uint64_t cr2) {
     uint64_t fault_page = cr2       & ~0xFFFULL;
     uint64_t slack      = STACK_SLACK_PAGES * PAGE_SIZE_4K;
 
-    if (fault_page > rsp_page) return 0;               // above rsp — weird
-    if (rsp_page - fault_page > slack) return 0;        // too far below
+    /* Anything at or above rsp is live frame space (a large frame is
+     * allocated with one `sub rsp` and touched out of order). */
+    if (fault_page < rsp_page && rsp_page - fault_page > slack) return 0;  // too far below
 
     return 1;
 }

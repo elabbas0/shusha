@@ -143,6 +143,21 @@ isr_common:
     mov rdi, rsp        ; first arg = pointer to registers on stack
     call isr_handler
 
+    ; Data segments for the return, chosen while every saved register is
+    ; still on the stack (CS sits above 15 GPRs, int_no and err_code), so
+    ; the interrupted code gets all of its registers back untouched.
+    test byte [rsp + 15*8 + 16 + 8], GDT_USER_RPL
+    jz .isr_return_kernel
+    xor eax, eax
+    jmp .isr_return_seg
+.isr_return_kernel:
+    mov ax, GDT_KERNEL_DATA
+.isr_return_seg:
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+
     pop r15
     pop r14
     pop r13
@@ -158,23 +173,7 @@ isr_common:
     pop rdx
     pop rcx
     pop rax
-
     add rsp, 16         ; skip int_no and err_code
-    test byte [rsp + 8], GDT_USER_RPL
-    jz .isr_return_kernel
-    xor ecx, ecx
-    mov ds, cx
-    mov es, cx
-    mov fs, cx
-    mov gs, cx
-    jmp .isr_return_done
-.isr_return_kernel:
-    mov cx, GDT_KERNEL_DATA
-    mov ds, cx
-    mov es, cx
-    mov fs, cx
-    mov gs, cx
-.isr_return_done:
     iretq
 
 ; common irq handler
@@ -205,6 +204,21 @@ irq_common:
     mov rdi, rsp        ; first arg = pointer to registers on stack
     call irq_handler
 
+    ; Data segments for the return, chosen while every saved register is
+    ; still on the stack (CS sits above 15 GPRs, int_no and err_code), so
+    ; the interrupted code gets all of its registers back untouched.
+    test byte [rsp + 15*8 + 16 + 8], GDT_USER_RPL
+    jz .irq_return_kernel
+    xor eax, eax
+    jmp .irq_return_seg
+.irq_return_kernel:
+    mov ax, GDT_KERNEL_DATA
+.irq_return_seg:
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+
     pop r15
     pop r14
     pop r13
@@ -220,23 +234,7 @@ irq_common:
     pop rdx
     pop rcx
     pop rax
-
     add rsp, 16         ; skip int_no and err_code
-    test byte [rsp + 8], GDT_USER_RPL
-    jz .irq_return_kernel
-    xor ecx, ecx
-    mov ds, cx
-    mov es, cx
-    mov fs, cx
-    mov gs, cx
-    jmp .irq_return_done
-.irq_return_kernel:
-    mov cx, GDT_KERNEL_DATA
-    mov ds, cx
-    mov es, cx
-    mov fs, cx
-    mov gs, cx
-.irq_return_done:
     iretq
 
 extern syscall_handler

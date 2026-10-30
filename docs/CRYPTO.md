@@ -11,16 +11,16 @@ A workspace file, at each point in its life:
 
 ```
 on a member's disk   [ home-volume layer ( file layer ( content ) ) ]   + signature
-on the network       [ Noise transport  ( file layer ( content ) ) ]    + signature
+on the network       [ secure channel   ( file layer ( content ) ) ]    + signature
 in the cloud backup  [                    file layer ( content )   ]    + signature
-in a live session    [ Noise transport  ( session layer ( op batch ) ) ] + signature
+in a live session    [ secure channel   ( session layer ( op batch ) ) ] + signature
 ```
 
 | Layer | Protects against | Key | Algorithm |
 |---|---|---|---|
 | L1 Key store | Stolen disk getting private keys | Password (Argon2id) + 2-of-3 hardware binding | XChaCha20-Poly1305 |
 | L2 Home volume | Stolen disk reading local files | Per-user volume key VK | XChaCha20-Poly1305, per-file subkeys |
-| L3 Transport | Network snooping, tampering, replay | Noise session keys (ephemeral) | ChaCha20-Poly1305, counter nonces |
+| L3 Transport | Network snooping, tampering, replay | Channel session keys (ephemeral, hybrid X25519 + ML-KEM) | ChaCha20-Poly1305, counter nonces |
 | L4 Workspace file | Other members, storage nodes, cloud, relays | Per-file key FK (per epoch) | XChaCha20-Poly1305, 64 KiB chunks |
 | L5 Live session | Same as L4, for co-editing ops | Session key SK = HKDF(FK, session) | XChaCha20-Poly1305 |
 | L6 Signatures | Forged or unauthorized edits | Device signing key | Ed25519 |
@@ -118,19 +118,29 @@ wrap_sym(KEK, K, purpose) = n || XChaCha20-Poly1305(KEK, n, K, aad = purpose)
 
 ## 5. L3: transport (`netd`)
 
-- **Handshake:** Noise XX the first time two devices meet, and Noise IK after
-  that (it is faster, since the peer key is already known).
-  - An ML-KEM-768 encapsulation is mixed into the chaining key, making the
-    exchange hybrid post-quantum.
-  - Static keys = device agreement keys.
-  - The peer is accepted only if its device certificate chains to a member
-    in the workspace log.
-- **Data:** each frame is ChaCha20-Poly1305 under the session key with a
-  64-bit counter nonce. A sliding window rejects replayed and duplicate
-  counters.
-- **Rekeying:** every 2^20 messages or 10 minutes, whichever comes first.
-  This uses Noise `Rekey()`, plus a fresh handshake every hour, which gives
-  forward secrecy.
+- **Handshake (implemented, `user/lib/chan.c`):** a SIGMA-I style
+  exchange over UDP, used instead of Noise because it needs only the
+  primitives we already have and keeps identities hidden:
+  ```
+  HS1  I -> R : sid_i, eI (X25519), ekI (ephemeral ML-KEM-768 key)
+  HS2  R -> I : sid_i, sid_r, eR, ct = Encaps(ekI),
+                Enc_hs_r( pub_R, Sign_R("shusha-ch-R" || th1) )
+  HS3  I -> R : sid_r, Enc_hs_i( pub_I, Sign_I("shusha-ch-I" || th2) )
+  prk = HKDF-Extract(th1, X25519(eI, eR) || ML-KEM shared secret)
+  ```
+  - Hybrid post-quantum: reading a session needs both X25519 and
+    ML-KEM-768 broken. Both halves are ephemeral, so it is forward secret.
+  - Both sides prove their Ed25519 device key by signing the transcript
+    hash; the identities travel encrypted, so a passive observer cannot see
+    who is talking.
+  - The channel only authenticates a key. `workspaced` then requires that
+    key to be a member in the verified log (or, for a join, to present a
+    valid invite proof bound to that key).
+- **Data:** each frame is ChaCha20-Poly1305 under per-direction keys
+  expanded from prk and the final transcript hash, with a 64-bit counter
+  nonce. A 64-packet sliding window rejects replays and duplicates.
+- **Rekeying (not yet implemented):** every 2^20 messages or 10 minutes,
+  plus a fresh handshake every hour.
 - **Session keys** never touch disk.
 
 ## 6. L4: workspace files
@@ -255,8 +265,8 @@ CSPRNG.
   - FIPS 203 (ML-KEM)
   - RFC 5869 (HKDF)
   - RFC 9106 (Argon2id)
-  - Noise test vectors
-- **Every format parser is fuzzed:** lockbox, FileObject, Noise frames, and
+  - channel handshake transcripts (known-answer, tamper and replay cases)
+- **Every format parser is fuzzed:** lockbox, FileObject, channel frames, and
   log entries.
 
 ## 11. Build order
@@ -266,6 +276,6 @@ CSPRNG.
 2. Ed25519 and ML-KEM-768. Hybrid `wrap()`/`unwrap()`.
 3. Argon2id, Shamir 2-of-3, and `keyd` (L1).
 4. L2 home volume in the VFS.
-5. Noise in `netd` (L3).
+5. Secure channel (L3) - done, in `workspaced` for now; moves to `netd`.
 6. FileObject, lockbox, and the rank chain (L4).
 7. Session keys and signed op batches (L5).

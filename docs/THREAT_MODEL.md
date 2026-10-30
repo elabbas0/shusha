@@ -90,10 +90,10 @@ vectors, fuzzing, and review. Custom ciphers would make us weaker against A7.
   | Encryption (stored data) | XChaCha20-Poly1305, random 24-byte nonce | draft-irtf-cfrg-xchacha |
 | Encryption (transport) | ChaCha20-Poly1305, counter nonce (AES-256-GCM optional) | RFC 8439, SP 800-38D |
   | Key derivation | HKDF-SHA-256 | RFC 5869 |
-  | Hashing | SHA-256 (BLAKE2s optional for Noise) | FIPS 180-4 |
+  | Hashing | SHA-256, SHA-3/SHAKE, BLAKE2b | FIPS 180-4, FIPS 202, RFC 7693 |
   | Password hashing | Argon2id | RFC 9106 |
   | Random numbers | ChaCha20 DRBG seeded from RDSEED/RDRAND + jitter | — |
-  | Transport handshake | Noise XX / IK with a hybrid ML-KEM step | noiseprotocol.org |
+  | Transport handshake | SIGMA-I with X25519 + ML-KEM-768 and Ed25519 signatures | CRYPTO.md §5 |
 | Key splitting (hardware binding) | Shamir secret sharing, 2-of-3 | — |
 
 - "Our own encryption" means **our own protocol and key hierarchy**, never our

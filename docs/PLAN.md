@@ -19,7 +19,7 @@ real-time co-editing, working over LAN and internet with no paid servers.
 | R4 | First creator is admin; later joiners get lower ranks | Genesis entry = rank 0; next rank by join order; re-rankable |
 | R5 | Lower ranks need permission to view or edit higher ranks' files; never the reverse | Rank-key chain plus signed grants (WORKSPACE §3) |
 | R6 | Admin has the highest authority | Admin holds RK_0, which unlocks everything; only the admin delegates stewards |
-| R7 | LAN **and** internet | Noise over UDP, LAN beacons, DHT/rendezvous, STUN + relays (WORKSPACE §5) |
+| R7 | LAN **and** internet | Hybrid secure channel over UDP, LAN beacons, DHT/rendezvous, STUN + relays (WORKSPACE §5) |
 | R8 | Works with the admin offline, cloud-like, free | Members and storage nodes replicate ciphertext; stewards; pre-signed succession |
 | R9 | Real-time co-editing; a higher editor must allow a lower one in; everyone sees who is editing | CRDT + edit sessions with a rank-based lead and visible presence (WORKSPACE §4) |
 | R10 | No TPM required; key tied to hardware ID | Random key, hardware ID *binds* it (2-of-3) together with the password; TPM used if present |
@@ -34,7 +34,7 @@ real-time co-editing, working over LAN and internet with no paid servers.
 │   (log, CRDT,        (key store,  (accounts,               │
 │    sync, presence)    wrap/unwrap) Argon2id)               │
 │        │                  │                                │
-│   netd (Noise, UDP reliability, discovery, NAT, relay)     │
+│   netd (channel, UDP reliability, discovery, NAT, relay)   │
 ├──────────────── IPC: SYS_MSG_* / SYS_SHM_* ────────────────┤
 │ ICDA kernel: enforced uid/permissions, CSPRNG, crypto      │
 │ primitives, UDP/TCP listen, per-process isolation          │
@@ -71,12 +71,12 @@ Each phase has an exit test that must pass in QEMU before the next one starts.
 | 0. Groundwork | Import ICDA kernel, drivers, and WM into this repo with credit; add the license exception; CI with test vectors | Shusha boots in QEMU; CI green |
 | 1. Kernel security | CSPRNG; uid enforcement; VFS owner/mode; new primitives; constant-time audit; UDP receive and listening TCP | RFC/FIPS test vectors pass; user B cannot read user A's file; two VMs exchange UDP |
 | 2. Local multi-user | `authd` (accounts, Argon2id), `keyd` (hardware binding, wrapping), login screen, encrypted home folders, recovery phrase | Disk moved to another VM will not unlock; wrong password fails; one swapped component still unlocks |
-| 3. Secure transport | `netd` with hybrid Noise over UDP, reliability layer, LAN beacons | Two VMs establish a session; tampered or replayed packets rejected |
+| 3. Secure transport | `netd` with the hybrid channel over UDP, reliability layer, LAN beacons | Two VMs establish a session; tampered or replayed packets rejected |
 | 4. Workspace core | Genesis, log, invites (QR/text), join, ranks, stewards, succession | 5 VMs join in order with ranks 0–4; a patched client without an invite is dropped |
 | 5. Encrypted files | Rank keys, file keys, grants and requests, removal and rekeying, ciphertext replication | Rank 3 cannot open rank 1's file until granted; admin opens everything; removed member cannot read new versions |
 | 6. Co-editing | CRDT, signed op batches, edit sessions, lead approval, presence UI | Admin and rank 2 co-edit live; rank 3 must be approved by the lead; all readers see the editor list |
 | 7. Internet | STUN, hole punching, DHT records, relays, optional rendezvous, storage nodes, cloud backup | Two VMs behind separate NATs sync; workspace syncs with the admin powered off |
-| 8. Hardening | Fuzz every parser (Noise, log, CRDT, VFS syscalls); SMEP/SMAP/W^X/ASLR; external review | No crashes after a set fuzzing budget; findings fixed |
+| 8. Hardening | Fuzz every parser (channel, log, CRDT, VFS syscalls); SMEP/SMAP/W^X/ASLR; external review | No crashes after a set fuzzing budget; findings fixed |
 
 ## Progress
 
@@ -84,6 +84,9 @@ Each phase has an exit test that must pass in QEMU before the next one starts.
 |---|---|
 | 0. Groundwork | Done. Kernel/drivers imported from ICDA (only the kernel; userspace is new). New build, initramfs manifest, init, shell. |
 | 1. Kernel security | Partly done. CSPRNG + `/dev/random`; TLS/session-token randomness fixed; crypto library complete for the design: ChaCha20-Poly1305, XChaCha20-Poly1305, SHA-2, SHA-3/SHAKE, BLAKE2b, HMAC, HKDF, Argon2id, Ed25519, X25519, ML-KEM-768 and the hybrid key wrap, 245 test-vector checks. Files and directories have owners and rwx modes enforced by the file syscalls; `/dev/setuid`, `/dev/chmod`, `/dev/chown`; `fscheck` (21 checks) in the image. Still to do: listening sockets. |
+| 3. Secure transport | Done for LAN. Kernel UDP for userspace (`/dev/udp`, `/dev/netinfo`), ARP replies, link-local addressing; SIGMA-I channel with X25519 + ML-KEM-768 and Ed25519 identities, AEAD frames, replay window. Multi-VM harness `scripts/lan.py`. Still to do: reliability layer, rekeying, beacons. |
+| 4. Workspace core | v1 done on LAN: genesis, admin-signed hash-chained log, single-use invites, join in order (ranks 0-4 in the 5-VM test), forged/reused invites refused. Stewards and succession to do. |
+| 5. Encrypted files | v1 done on LAN: rank-key chain, per-file keys, owner-signed replicated objects, request/grant, reads with the admin offline (`scripts/ws-lan-test.py`, 32 checks). Removal and rekeying to do. |
 | UI | New compositor (`wm`), client library, Explorer and Terminal ported from ICDA. |
 
 ### Gaps found while building
@@ -92,6 +95,8 @@ Each phase has an exit test that must pass in QEMU before the next one starts.
 - **Message queues were never freed** (close is a stub in the frozen ABI). Shusha now reclaims queues whose creating process has exited.
 - **ICDA's USB stack is missing upstream.** `kernel.c` referenced `drivers/usb/xhci.*` and `memory/dma.*`, which were never committed to ICDA; USB init is removed until those sources exist.
 - **Ownership limits (for now):** owners and modes are not yet saved by the on-disk persistence layer (live sessions only); the Linux-personality fd syscalls and program execution are not permission-checked yet; until the login service exists, the desktop runs as root.
+- **Exception and IRQ returns zeroed the user's RCX.** ICDA's `isr_common`/`irq_common` reloaded the data segments through `cx` after restoring the registers, so any page fault taken from user mode (e.g. stack growth) silently cleared RCX. Fixed by choosing the segments before the pops.
+- **Stack growth refused GCC's stack-clash probes.** `orq $0,(%rsp)` faults as a read, and the handler only grew the stack on writes and never above RSP. It now accepts any not-present access in the stack region at or near RSP.
 - **Display mode** follows whatever GRUB sets (800x600 in QEMU), by ICDA's design for monitor compatibility.
 
 ## Decisions

@@ -97,8 +97,9 @@ Entry types:
    **invite code** (shown as a QR code or text, like `shusha:ws/…`).
 2. The invite code carries the workspace id, the steward's address hints, and
    a one-time secret, and is shared out of band.
-3. The joining device connects, proves knowledge of the one-time secret
-   inside the Noise handshake, receives the log, and appends `join`.
+3. The joining device opens a secure channel, proves knowledge of the
+   one-time secret bound to its authenticated device key, receives the log,
+   and the admin appends `join`.
 4. Only then do peers accept the device. A modified client without a valid
    invite chain is just an unknown key and gets dropped.
 
@@ -129,6 +130,9 @@ When a member at rank *r* creates a file, FK is wrapped for:
 
 1. the owner's user key;
 2. RK_(r-1), so everyone ranked above the owner can read it (unless r = 0);
+   - v1 seals under RK_r instead, because the owner cannot derive RK_(r-1).
+     That is equivalent while every rank has one member. Equal ranks (D3)
+     need a public-key wrap to RK_(r-1) here.
 3. any explicitly granted member's user key.
 
 The result matches the spec:
@@ -214,8 +218,8 @@ A live **edit session** exists while anyone is editing a file.
 
 ### Transport
 
-- Noise XX for the first contact and Noise IK afterwards, with an ML-KEM-768
-  encapsulation mixed into the chaining key (hybrid post-quantum).
+- A SIGMA-I style handshake with ephemeral X25519 and ML-KEM-768 (hybrid
+  post-quantum) and Ed25519 device signatures; see CRYPTO.md §5.
 - It runs over UDP with our own small reliability layer, so that NAT hole
   punching works. TCP is the fallback on networks that block UDP.
 - Every frame is authenticated. There are replay counters per session.
@@ -255,3 +259,30 @@ A live **edit session** exists while anyone is editing a file.
 - **What it cannot do:** real-time co-editing needs the co-editors to be
   online together, either directly or through a relay. Everything else
   syncs when anyone comes back.
+
+## 6. What v1 implements (LAN)
+
+`user/sbin/workspaced.c` (the service), `user/apps/ws.c` (the command) and
+`user/lib/chan.c` (the secure channel). Tested end to end by
+`scripts/ws-lan-test.py`, which boots five QEMU machines on one virtual
+Ethernet segment:
+
+| Check | Result |
+|---|---|
+| vm1 creates the workspace; vm2-vm5 join in order | ranks 0, 1, 2, 3, 4 |
+| Forged invite; reused invite | both refused by the admin |
+| Every machine replays and verifies the signed log | all five list ranks 0-4 |
+| Rank 2 shares a file | ranks 0, 1, 2 read it; ranks 3, 4 see only "locked file" |
+| Rank 3 requests access, rank 2 grants | rank 3 reads it, rank 4 is still locked |
+| Admin powered off | rank 1 still reads its replica; a new rank-4 file reaches and is readable by ranks 1-3 |
+
+Commands: `ws status | create <name> | invite | join <code> [name] |
+members | put <file> | files | cat <file> | request <file> | requests |
+grant <file> <rank> | sync`.
+
+Not yet in v1: stewards and succession, re-ranking, removal and rekeying,
+edit grants (any reader holding FK could re-encrypt; objects are only
+accepted if signed by the owner or a higher rank), rollback protection for
+objects, LAN beacons (members are found by the addresses in the log), the
+internet path (section 5), and co-editing (section 4). State lives in
+RAM on live images until on-disk ownership persistence lands.
