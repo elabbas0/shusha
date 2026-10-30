@@ -22,3 +22,4 @@ make test         # crypto test vectors on the host
 - [Threat model](docs/THREAT_MODEL.md)
 - [Workspace design](docs/WORKSPACE.md)
 - [Encryption and decryption](docs/CRYPTO.md)
+- [Article (AzTU format)](docs/article/)
