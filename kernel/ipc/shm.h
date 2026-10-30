@@ -12,7 +12,8 @@
 #define SHM_SLOT_SIZE   (16ULL * 1024ULL * 1024ULL)
 #define SHM_MAX_REGIONS 32
 
-/* Returns 1-based handle, 0 on failure */
+/* Returns an unguessable handle (random tag | slot), 0 on failure.  Only
+ * holders of the exact handle can map the region. */
 uint64_t shm_create(uint64_t size);
 
 /* Map handle into current process VA; returns virtual addr or 0 */

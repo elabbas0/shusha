@@ -88,7 +88,7 @@ Each phase has an exit test that must pass in QEMU before the next one starts.
 
 ### Gaps found while building
 
-- **Shared memory and message queues have no access control.** Any process can map any SHM handle or open any named queue, so one app can read another window's pixels. Fix in phase 1 with per-process handle tables (owner + grantee), before multi-user work.
+- **Shared memory and message queues had no access control** (any process could map any window buffer or read any queue). Fixed: SHM handles are unguessable capabilities, only a queue's owner can receive from it, `/proc/<pid>/` queue names are reserved for that pid, and messages carry a kernel-stamped sender pid that the WM and apps check. `ipccheck` (in the image) tries these attacks.
 - **Message queues were never freed** (close is a stub in the frozen ABI). Shusha now reclaims queues whose creating process has exited.
 - **ICDA's USB stack is missing upstream.** `kernel.c` referenced `drivers/usb/xhci.*` and `memory/dma.*`, which were never committed to ICDA; USB init is removed until those sources exist.
 - **Display mode** follows whatever GRUB sets (800x600 in QEMU), by ICDA's design for monitor compatibility.

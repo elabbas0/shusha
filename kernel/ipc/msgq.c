@@ -2,11 +2,21 @@
 #include "../proc/sched.h"
 #include <stdint.h>
 
+/*
+ * Access rules:
+ *  - anyone may open a queue by name and send to it;
+ *  - only the owner (creating process) may receive from it or poll it;
+ *  - names under "/proc/<pid>/" can only be created by process <pid>,
+ *    so a process's private mailbox cannot be squatted in advance;
+ *  - every message records its sender's pid, which a receiver can ask
+ *    for (MSGQ_RECV_SENDER) to authenticate the peer.
+ */
 typedef struct {
     int      valid;
     uint64_t owner_pid;   /* creating user process, 0 = kernel/boot */
     char     name[MSGQ_NAME_MAX];
     uint8_t  buffer[MSGQ_MAX_MSGS][MSGQ_MSG_SIZE];
+    uint64_t sender[MSGQ_MAX_MSGS];
     uint32_t head;
     uint32_t tail;
     uint32_t count;
@@ -36,13 +46,39 @@ static void msgq_copy_name(char *dst, const char *src) {
     dst[i] = 0;
 }
 
+static uint64_t current_pid(void) {
+    process_t *p = sched_current_process();
+    return p ? p->pid : 0;
+}
+
+/* For "/proc/<pid>/...", the pid that may create it; 0 for other names. */
+static uint64_t reserved_pid(const char *name) {
+    static const char prefix[] = "/proc/";
+    uint64_t pid = 0;
+    int i;
+    for (i = 0; prefix[i]; i++) {
+        if (name[i] != prefix[i]) return 0;
+    }
+    if (name[i] < '0' || name[i] > '9') return 0;
+    while (name[i] >= '0' && name[i] <= '9') pid = pid * 10 + (uint64_t)(name[i++] - '0');
+    return name[i] == '/' ? pid : 0;
+}
+
+static int is_owner(const msgq_t *q) {
+    return q->owner_pid == 0 || q->owner_pid == current_pid();
+}
+
 uint64_t msgq_open(const char *name) {
+    uint64_t reserved;
     if (!name || !*name) return 0;
 
     for (uint64_t i = 0; i < MSGQ_MAX_QUEUES; i++) {
         if (msgq_table[i].valid && msgq_name_eq(msgq_table[i].name, name))
             return i + 1;
     }
+
+    reserved = reserved_pid(name);
+    if (reserved && reserved != current_pid()) return 0;
 
     for (uint64_t pass = 0; pass < 2; pass++) {
         for (uint64_t i = 0; i < MSGQ_MAX_QUEUES; i++) {
@@ -70,18 +106,20 @@ int msgq_send(uint64_t handle, const void *msg) {
     uint8_t *slot = q->buffer[q->head];
     const uint8_t *src = (const uint8_t *)msg;
     for (int i = 0; i < MSGQ_MSG_SIZE; i++) slot[i] = src[i];
+    q->sender[q->head] = current_pid();
 
     q->head = (q->head + 1) % MSGQ_MAX_MSGS;
     q->count++;
     return 0;
 }
 
-int msgq_recv(uint64_t handle, void *out, int block) {
+int64_t msgq_recv(uint64_t handle, void *out, int flags) {
+    uint64_t sender;
     if (!handle || handle > MSGQ_MAX_QUEUES || !out) return -1;
     msgq_t *q = &msgq_table[handle - 1];
-    if (!q->valid) return -1;
+    if (!q->valid || !is_owner(q)) return -1;
 
-    if (block) {
+    if (flags & MSGQ_RECV_BLOCK) {
         uint64_t spin = 0;
         while (q->count == 0) {
             /* Sleep a tick between checks so a blocking reader does not
@@ -100,16 +138,21 @@ int msgq_recv(uint64_t handle, void *out, int block) {
     uint8_t *slot = q->buffer[q->tail];
     uint8_t *dst  = (uint8_t *)out;
     for (int i = 0; i < MSGQ_MSG_SIZE; i++) dst[i] = slot[i];
+    sender = q->sender[q->tail];
 
     q->tail = (q->tail + 1) % MSGQ_MAX_MSGS;
     q->count--;
-    return 0;
+    return (flags & MSGQ_RECV_SENDER) ? (int64_t)sender : 0;
 }
 
-int msgq_poll(uint64_t handle) {
+int64_t msgq_poll(uint64_t handle, int flags) {
     if (!handle || handle > MSGQ_MAX_QUEUES) return -1;
     msgq_t *q = &msgq_table[handle - 1];
     if (!q->valid) return -1;
+    /* Anyone holding the name may learn who owns it (to authenticate a
+     * service such as the WM); only the owner may see its backlog. */
+    if (flags & MSGQ_POLL_OWNER) return (int64_t)q->owner_pid;
+    if (!is_owner(q)) return -1;
     return (q->count > 0) ? 1 : 0;
 }
 

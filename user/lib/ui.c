@@ -10,22 +10,34 @@ static surface_t surf;
 static uint32_t *shared;
 static uint64_t shm_handle;
 static uint64_t wm_q, my_q;
+static long wm_pid;
 static uint32_t win_id;
 
 static void msg_clear(ui_msg_t *m) {
     mem_set(m, 0, sizeof(*m));
 }
 
+/* Next message from the WM itself; anything another process managed to
+ * send to our mailbox is dropped. */
+static int recv_from_wm(ui_msg_t *m) {
+    long from;
+    while ((from = sh_msg_recv_from(my_q, m)) > 0) {
+        if (from == wm_pid) return 0;
+    }
+    return -1;
+}
+
 int ui_open(const char *title, int w, int h) {
-    char qname[32] = "/ui/p";
+    char qname[48];
     ui_msg_t m;
     int tries;
 
     if ((uint64_t)w * (uint64_t)h > UI_MAX_PIXELS || w <= 0 || h <= 0) return -1;
     wm_q = sh_msg_open(UI_WM_QUEUE);
-    fmt_u64(qname + 5, sh_pid(), 10);
+    if (!wm_q || (wm_pid = sh_msg_owner(wm_q)) <= 0) return -1;
+    ui_mailbox_name(qname, sizeof(qname), sh_pid());
     my_q = sh_msg_open(qname);
-    if (!wm_q || !my_q) return -1;
+    if (!my_q) return -1;
 
     msg_clear(&m);
     m.type = UI_OPEN;
@@ -37,7 +49,7 @@ int ui_open(const char *title, int w, int h) {
 
     /* The WM answers within a frame or two; give up after ~5 s. */
     for (tries = 0; tries < 500; tries++) {
-        if (sh_msg_recv(my_q, &m, 0) == 0) {
+        if (recv_from_wm(&m) == 0) {
             if (m.type == UI_OPEN_OK) break;
             if (m.type == UI_OPEN_FAIL) return -1;
             continue;
@@ -88,8 +100,7 @@ void ui_present(void) {
 int ui_poll(ui_event_t *ev) {
     ui_msg_t m;
 
-    while (sh_msg_recv(my_q, &m, 0) == 0) {
-        /* A recycled queue could still hold another window's traffic. */
+    while (recv_from_wm(&m) == 0) {
         if (m.window != win_id) continue;
         mem_set(ev, 0, sizeof(*ev));
         switch (m.type) {

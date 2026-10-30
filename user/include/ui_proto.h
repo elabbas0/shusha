@@ -5,7 +5,10 @@
  *
  * Every message is 64 bytes (the kernel message-queue slot size).
  * Clients send to the WM's queue (UI_WM_QUEUE); the WM replies on the
- * client's queue "/ui/p<pid>".  Pixels travel through shared memory:
+ * client's private mailbox "/proc/<pid>/ui", which only that process
+ * can create or read.  Both sides check the kernel-stamped sender pid:
+ * the WM trusts a window's messages only from that window's process,
+ * clients trust events only from the owner of UI_WM_QUEUE.  Pixels travel through shared memory:
  * the WM creates one 32bpp 0x00RRGGBB buffer per window and the client
  * maps it.  Clients draw privately and copy only the damaged rectangle
  * into shared memory before sending UI_DAMAGE, so the WM never composites
@@ -14,6 +17,14 @@
 #include <stdint.h>
 
 #define UI_WM_QUEUE "/ui/wm"
+
+#include "lib.h"
+static inline void ui_mailbox_name(char *out, uint64_t cap, uint64_t pid) {
+    char n[24];
+    str_copy(out, "/proc/", cap);
+    str_cat(out, fmt_u64(n, pid, 10), cap);
+    str_cat(out, "/ui", cap);
+}
 
 enum {
     UI_OPEN = 1,     /* client -> wm: w, h, pid, title          */

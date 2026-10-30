@@ -161,7 +161,11 @@ static inline void     sh_shm_unmap(uint64_t h)                 { (void)sys1(SYS
 static inline void     sh_shm_close(uint64_t h)                 { (void)sys1(SYS_SHM_CLOSE, h); }
 static inline uint64_t sh_msg_open(const char *name)            { return sys1(SYS_MSG_OPEN, U(name)); }
 static inline int      sh_msg_send(uint64_t q, const void *m)   { return (int)sys2(SYS_MSG_SEND, q, U(m)); }
-static inline int      sh_msg_recv(uint64_t q, void *m, int block) { return (int)sys3(SYS_MSG_RECV, q, U(m), (uint64_t)block); }
+static inline int      sh_msg_recv(uint64_t q, void *m, int block) { return (int)sys3(SYS_MSG_RECV, q, U(m), (uint64_t)(block & 1)); }
+/* Receive and report the sender's pid (kernel-stamped): returns pid > 0, or -1. */
+static inline long     sh_msg_recv_from(uint64_t q, void *m)   { return (long)sys3(SYS_MSG_RECV, q, U(m), 2); }
+/* Pid of the process that owns (created) a queue. */
+static inline long     sh_msg_owner(uint64_t q)                { return (long)sys2(SYS_MSG_POLL, q, 1); }
 static inline uint64_t sh_map_framebuffer(sh_fb_info_t *i)      { return sys1(SYS_MAP_FRAMEBUFFER, U(i)); }
 static inline int      sh_read_mouse(sh_mouse_t *m)             { return (int)sys1(SYS_INPUT_READ_MOUSE, U(m)); }
 static inline long     sh_gpu_query(sh_gpu_info_t *g)           { return (long)sys1(SYS_GPU_QUERY, U(g)); }

@@ -1840,10 +1840,13 @@ static uint64_t syscall_dispatch_native(struct registers *regs) {
             if (!user_range_prepare_cur_w(out, 64)) {
                 return (uint64_t)-U_EFAULT;
             }
-            return (uint64_t)msgq_recv(regs->rdi, out, (int)regs->rdx);
+            /* rdx: bit0 block, bit1 return sender pid (post-freeze
+             * flag, see docs/ABI-v1.md); upper bits must be 0. */
+            return (uint64_t)msgq_recv(regs->rdi, out, (int)(regs->rdx & 3));
         }
         case SYS_MSG_POLL:
-            return (uint64_t)msgq_poll(regs->rdi);
+            /* rsi bit0: return the queue owner's pid (post-freeze). */
+            return (uint64_t)msgq_poll(regs->rdi, (int)(regs->rsi & 1));
         case SYS_MAP_FRAMEBUFFER: {
             syscall_fb_info_t *info = (syscall_fb_info_t *)(uintptr_t)regs->rdi;
             const dev_calls_t *dfb = dev_fb();

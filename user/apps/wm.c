@@ -599,15 +599,16 @@ static void restore_window(int idx) {
     damage_dock();
 }
 
-static void open_window(const ui_msg_t *req) {
-    char qname[32] = "/ui/p";
+static void open_window(const ui_msg_t *req, uint32_t pid) {
+    char qname[48];
     ui_msg_t m;
     int idx = -1, w = req->open.w, h = req->open.h;
     int max_h = screen.h - PANEL_H - TITLE_H - DOCK_H - DOCK_MARGIN - 24;
     uint64_t q;
     static int cascade;
 
-    fmt_u64(qname + 5, req->open.pid, 10);
+    /* The kernel-stamped sender, not the pid the request claims. */
+    ui_mailbox_name(qname, sizeof(qname), pid);
     q = sh_msg_open(qname);
     if (!q) return;
     mem_set(&m, 0, sizeof(m));
@@ -639,7 +640,7 @@ static void open_window(const ui_msg_t *req) {
 
     win->used = 1;
     win->id = next_id++;
-    win->pid = req->open.pid;
+    win->pid = pid;
     win->q = q;
     win->w = w;
     win->h = h;
@@ -902,18 +903,22 @@ static int pump_input(void) {
 
 static int pump_messages(uint64_t q) {
     ui_msg_t m;
+    long from;
     int busy = 0;
 
-    while (sh_msg_recv(q, &m, 0) == 0) {
+    while ((from = sh_msg_recv_from(q, &m)) > 0) {
         int idx;
         busy = 1;
+        if (m.type == UI_OPEN) {
+            open_window(&m, (uint32_t)from);
+            continue;
+        }
+        idx = win_by_id(m.window);
+        /* A window can only be damaged or closed by its own process. */
+        if (idx < 0 || wins[idx].pid != (uint32_t)from) continue;
         switch (m.type) {
-        case UI_OPEN:
-            open_window(&m);
-            break;
         case UI_DAMAGE:
-            idx = win_by_id(m.window);
-            if (idx >= 0 && !wins[idx].minimized) {
+            if (!wins[idx].minimized) {
                 win_t *w = &wins[idx];
                 rect_t r = { w->x + m.damage.x, w->y + m.damage.y, m.damage.w, m.damage.h };
                 rect_t content = { w->x, w->y, w->w, w->h }, c;
@@ -922,8 +927,7 @@ static int pump_messages(uint64_t q) {
             }
             break;
         case UI_CLOSE:
-            idx = win_by_id(m.window);
-            if (idx >= 0) close_window(idx);
+            close_window(idx);
             break;
         default:
             break;
@@ -956,6 +960,11 @@ int main(void) {
     dock_build();
 
     q = sh_msg_open(UI_WM_QUEUE);
+    if (!q || sh_msg_owner(q) != (long)sh_pid()) {
+        /* Someone else holds the WM's name: refuse to run under it. */
+        print("wm: /ui/wm is owned by another process\n");
+        return 1;
+    }
     {
         ui_msg_t stale;
         while (sh_msg_recv(q, &stale, 0) == 0) {}
