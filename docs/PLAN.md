@@ -78,6 +78,21 @@ Each phase has an exit test that must pass in QEMU before the next one starts.
 | 7. Internet | STUN, hole punching, DHT records, relays, optional rendezvous, storage nodes, cloud backup | Two VMs behind separate NATs sync; workspace syncs with the admin powered off |
 | 8. Hardening | Fuzz every parser (Noise, log, CRDT, VFS syscalls); SMEP/SMAP/W^X/ASLR; external review | No crashes after a set fuzzing budget; findings fixed |
 
+## Progress
+
+| Phase | State |
+|---|---|
+| 0. Groundwork | Done. Kernel/drivers imported from ICDA (only the kernel; userspace is new). New build, initramfs manifest, init, shell. |
+| 1. Kernel security | Partly done. CSPRNG + `/dev/random`; TLS/session-token randomness fixed; crypto library (ChaCha20-Poly1305, XChaCha20-Poly1305, SHA-2, HMAC, HKDF, Ed25519, DRBG) with 143 test-vector checks. Still to do: uid enforcement, VFS owner/mode, ML-KEM, Argon2id, listening sockets. |
+| UI | New compositor (`wm`), client library, Explorer and Terminal ported from ICDA. |
+
+### Gaps found while building
+
+- **Shared memory and message queues have no access control.** Any process can map any SHM handle or open any named queue, so one app can read another window's pixels. Fix in phase 1 with per-process handle tables (owner + grantee), before multi-user work.
+- **Message queues were never freed** (close is a stub in the frozen ABI). Shusha now reclaims queues whose creating process has exited.
+- **ICDA's USB stack is missing upstream.** `kernel.c` referenced `drivers/usb/xhci.*` and `memory/dma.*`, which were never committed to ICDA; USB init is removed until those sources exist.
+- **Display mode** follows whatever GRUB sets (800x600 in QEMU), by ICDA's design for monitor compatibility.
+
 ## Decisions
 
 | # | Decision | Status |

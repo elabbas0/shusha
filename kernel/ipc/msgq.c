@@ -4,6 +4,7 @@
 
 typedef struct {
     int      valid;
+    uint64_t owner_pid;   /* creating user process, 0 = kernel/boot */
     char     name[MSGQ_NAME_MAX];
     uint8_t  buffer[MSGQ_MAX_MSGS][MSGQ_MSG_SIZE];
     uint32_t head;
@@ -17,6 +18,16 @@ static int msgq_name_eq(const char *a, const char *b) {
     uint64_t i = 0;
     while (a[i] && b[i] && a[i] == b[i]) i++;
     return (a[i] == 0 && b[i] == 0);
+}
+
+/* A queue whose creating process has exited can be reused.  Queues
+ * have no close call in the frozen ABI, so without this the table
+ * fills up after a few dozen app launches. */
+static int msgq_reclaimable(const msgq_t *q) {
+    process_t *p;
+    if (!q->owner_pid) return 0;
+    p = sched_find_process(q->owner_pid);
+    return !p || p->state == PROCESS_EXITED;
 }
 
 static void msgq_copy_name(char *dst, const char *src) {
@@ -33,13 +44,18 @@ uint64_t msgq_open(const char *name) {
             return i + 1;
     }
 
-    for (uint64_t i = 0; i < MSGQ_MAX_QUEUES; i++) {
-        if (!msgq_table[i].valid) {
-            msgq_table[i].valid = 1;
-            msgq_table[i].head  = 0;
-            msgq_table[i].tail  = 0;
-            msgq_table[i].count = 0;
-            msgq_copy_name(msgq_table[i].name, name);
+    for (uint64_t pass = 0; pass < 2; pass++) {
+        for (uint64_t i = 0; i < MSGQ_MAX_QUEUES; i++) {
+            msgq_t *q = &msgq_table[i];
+            process_t *cur;
+            if (q->valid && !(pass == 1 && msgq_reclaimable(q))) continue;
+            cur = sched_current_process();
+            q->valid = 1;
+            q->owner_pid = cur ? cur->pid : 0;
+            q->head = 0;
+            q->tail = 0;
+            q->count = 0;
+            msgq_copy_name(q->name, name);
             return i + 1;
         }
     }

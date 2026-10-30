@@ -12,6 +12,7 @@ enum {
     SYS_VFS_READ       = 2,
     SYS_VFS_WRITE      = 3,
     SYS_EXIT           = 4,
+    SYS_INPUT_READ     = 5,
     SYS_GETCWD         = 6,
     SYS_CHDIR          = 7,
     SYS_LIST_DIR       = 8,
@@ -24,13 +25,67 @@ enum {
     SYS_WAITPID        = 17,
     SYS_YIELD          = 18,
     SYS_SLEEP          = 19,
+    SYS_PROC_INFO      = 20,
     SYS_INPUT_READLINE = 24,
     SYS_SYNC           = 25,
     SYS_TICKS          = 36,
     SYS_VFS_READ_AT    = 38,
     SYS_SPAWN_ARGS     = 53,
+    SYS_SHM_CREATE     = 54,
+    SYS_SHM_MAP        = 55,
+    SYS_SHM_UNMAP      = 56,
+    SYS_SHM_CLOSE      = 57,
+    SYS_MSG_OPEN       = 58,
+    SYS_MSG_SEND       = 59,
+    SYS_MSG_RECV       = 60,
+    SYS_MSG_POLL       = 61,
+    SYS_MAP_FRAMEBUFFER = 62,
+    SYS_INPUT_READ_MOUSE = 63,
+    SYS_GPU_QUERY      = 65,
+    SYS_GPU_PRESENT    = 66,
     SYS_POWER          = 68
 };
+
+typedef struct {
+    uint64_t virt_addr;
+    int32_t  width;
+    int32_t  height;
+    uint32_t pitch;
+    uint32_t bpp;
+} sh_fb_info_t;
+
+typedef struct {
+    int32_t  abs_x;
+    int32_t  abs_y;
+    int32_t  dx;
+    int32_t  dy;
+    uint8_t  buttons;
+} sh_mouse_t;
+
+typedef struct {
+    char     name[32];
+    int32_t  width;
+    int32_t  height;
+    uint32_t pitch;
+    uint32_t bpp;
+    uint32_t mode_count;
+    uint32_t hw_cursor;
+    uint32_t present_supported;
+    uint32_t flip_active;
+    uint32_t needs_present;
+} sh_gpu_info_t;
+
+typedef struct {
+    uint64_t pid;
+    uint64_t ppid;
+    uint64_t sid;
+    uint64_t pgid;
+    uint64_t kind;
+    uint64_t state;
+    uint64_t exit_code;
+} sh_proc_info_t;
+
+#define SH_PROC_EXITED 5
 
 typedef struct {
     uint64_t inode;
@@ -41,7 +96,7 @@ typedef struct {
     uint8_t  readonly;
 } sh_stat_t;
 
-#define SH_NODE_DIR 1
+#define SH_NODE_DIR 2
 
 static inline uint64_t sys0(uint64_t n) {
     uint64_t r;
@@ -97,6 +152,21 @@ static inline long     sh_readline(char *b, uint64_t cap)       { return (long)s
 static inline long     sh_sync(void)                            { return (long)sys0(SYS_SYNC); }
 static inline uint64_t sh_ticks(void)                           { return sys0(SYS_TICKS); }
 static inline long     sh_power(uint64_t op)                    { return (long)sys1(SYS_POWER, op); }
+
+static inline long     sh_read_char(void)                       { return (long)sys0(SYS_INPUT_READ); }
+static inline long     sh_proc_info(uint64_t pid, sh_proc_info_t *o) { return (long)sys2(SYS_PROC_INFO, pid, U(o)); }
+static inline uint64_t sh_shm_create(uint64_t size)             { return sys1(SYS_SHM_CREATE, size); }
+static inline void    *sh_shm_map(uint64_t h)                   { return (void *)(uintptr_t)sys1(SYS_SHM_MAP, h); }
+static inline void     sh_shm_unmap(uint64_t h)                 { (void)sys1(SYS_SHM_UNMAP, h); }
+static inline void     sh_shm_close(uint64_t h)                 { (void)sys1(SYS_SHM_CLOSE, h); }
+static inline uint64_t sh_msg_open(const char *name)            { return sys1(SYS_MSG_OPEN, U(name)); }
+static inline int      sh_msg_send(uint64_t q, const void *m)   { return (int)sys2(SYS_MSG_SEND, q, U(m)); }
+static inline int      sh_msg_recv(uint64_t q, void *m, int block) { return (int)sys3(SYS_MSG_RECV, q, U(m), (uint64_t)block); }
+static inline uint64_t sh_map_framebuffer(sh_fb_info_t *i)      { return sys1(SYS_MAP_FRAMEBUFFER, U(i)); }
+static inline int      sh_read_mouse(sh_mouse_t *m)             { return (int)sys1(SYS_INPUT_READ_MOUSE, U(m)); }
+static inline long     sh_gpu_query(sh_gpu_info_t *g)           { return (long)sys1(SYS_GPU_QUERY, U(g)); }
+static inline void     sh_gpu_present(void)                     { (void)sys1(SYS_GPU_PRESENT, 0); }
+static inline void     sh_exit(int code)                        { (void)sys1(SYS_EXIT, (uint64_t)code); for (;;) {} }
 
 #undef U
 

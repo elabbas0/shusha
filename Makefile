@@ -34,11 +34,15 @@ KERNEL_OBJ := $(KERNEL_C:%.c=$(B)/k/%.o) $(KERNEL_ASM:%.asm=$(B)/k/%.asm.o) $(B)
 # Each program: user/<dir>/<name>.c -> $(B)/user/<name>.app
 # USERPROGS maps the path inside the system to the built file.
 
-ULIB_OBJ := $(B)/u/lib/crt0.asm.o $(B)/u/lib/lib.o
-UPROGS   := init shell
+ULIB_OBJ := $(B)/u/lib/crt0.asm.o $(B)/u/lib/lib.o $(B)/u/crypto/mem.o
+UGUI_OBJ := $(B)/u/lib/ui.o $(B)/u/lib/draw.o
+UPROGS   := init shell wm explorer terminal
 
 USERPROGS := /sbin/init.app=$(B)/user/init.app \
-             /apps/shell.app=$(B)/user/shell.app
+             /apps/shell.app=$(B)/user/shell.app \
+             /apps/wm.app=$(B)/user/wm.app \
+             /apps/explorer.app=$(B)/user/explorer.app \
+             /apps/terminal.app=$(B)/user/terminal.app
 
 UAPPS := $(UPROGS:%=$(B)/user/%.app)
 
@@ -57,12 +61,19 @@ $(B)/u/%.o: user/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(UCFLAGS) -c $< -o $@
 
+$(B)/u/crypto/%.o: crypto/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(UCFLAGS) -c $< -o $@
+
 $(B)/u/%.asm.o: user/%.asm
 	@mkdir -p $(dir $@)
 	$(ASM) -f elf64 $< -o $@
 
 $(B)/user/init.app:  $(B)/u/sbin/init.o $(ULIB_OBJ)
 $(B)/user/shell.app: $(B)/u/apps/shell.o $(ULIB_OBJ)
+$(B)/user/wm.app: $(B)/u/apps/wm.o $(B)/u/lib/draw.o $(ULIB_OBJ)
+$(B)/user/explorer.app: $(B)/u/apps/explorer.o $(UGUI_OBJ) $(ULIB_OBJ)
+$(B)/user/terminal.app: $(B)/u/apps/terminal.o $(UGUI_OBJ) $(ULIB_OBJ)
 
 $(UAPPS): user/lib/user.ld
 	@mkdir -p $(dir $@)
