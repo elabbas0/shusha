@@ -4,8 +4,8 @@
 #include "lib.h"
 #include "ui.h"
 
-#define COLS 88
-#define ROWS 26
+#define COLS 84
+#define ROWS 24
 #define PAD  8
 #define WIN_W (COLS * GLYPH_W + 2 * PAD)
 #define WIN_H (ROWS * GLYPH_H + 2 * PAD)

@@ -71,7 +71,19 @@ $(B)/u/%.asm.o: user/%.asm
 
 $(B)/user/init.app:  $(B)/u/sbin/init.o $(ULIB_OBJ)
 $(B)/user/shell.app: $(B)/u/apps/shell.o $(ULIB_OBJ)
-$(B)/user/wm.app: $(B)/u/apps/wm.o $(B)/u/lib/draw.o $(ULIB_OBJ)
+$(B)/user/wm.app: $(B)/u/apps/wm.o $(B)/u/lib/draw.o $(B)/u/gen/wallpaper.asm.o $(ULIB_OBJ)
+
+# Wallpaper artwork: committed PNG -> raw premultiplied pixels (stdlib
+# Python only) -> linked into the WM.  Regenerate the PNG itself with
+# scripts/gen-wallpaper.py (needs Pillow).
+$(B)/gen/wallpaper.raw: user/assets/xari-bulbul.png scripts/png2raw.py
+	@mkdir -p $(dir $@)
+	python3 scripts/png2raw.py $< $@
+
+$(B)/u/gen/wallpaper.asm.o: $(B)/gen/wallpaper.raw
+	@mkdir -p $(dir $@)
+	printf 'section .rodata\nglobal wallpaper_raw\nalign 16\nwallpaper_raw: incbin "%s"\nsection .note.GNU-stack noalloc noexec nowrite progbits\n' $< > $(B)/gen/wallpaper.asm
+	$(ASM) -f elf64 $(B)/gen/wallpaper.asm -o $@
 $(B)/user/explorer.app: $(B)/u/apps/explorer.o $(UGUI_OBJ) $(ULIB_OBJ)
 $(B)/user/terminal.app: $(B)/u/apps/terminal.o $(UGUI_OBJ) $(ULIB_OBJ)
 

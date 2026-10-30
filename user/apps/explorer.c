@@ -6,8 +6,8 @@
 #include "lib.h"
 #include "ui.h"
 
-#define WANT_W 780
-#define WANT_H 520
+#define WANT_W 760
+#define WANT_H 480
 #define PATH_CAP 192
 #define NAME_CAP 64
 #define MAX_ITEMS 128
@@ -360,25 +360,6 @@ static void ctx_show(int x, int y, int idx) {
 
 /* ---- drawing ----------------------------------------------------------- */
 
-static void icon_folder(surface_t *s, int x, int y) {
-    draw_round_fill(s, x, y, 22, 10, 3, 0xc99a3e);
-    draw_round_fill(s, x, y + 6, 48, 32, 4, 0xe6b450);
-    draw_fill(s, x + 2, y + 10, 44, 2, 0xf1c972);
-}
-
-static void icon_file(surface_t *s, int x, int y) {
-    draw_fill(s, x + 8, y, 26, 40, 0xd8dee9);
-    draw_fill(s, x + 34, y + 10, 6, 30, 0xd8dee9);
-    draw_fill(s, x + 34, y, 6, 10, 0x9aa5b4);
-    for (int i = 0; i < 4; i++) draw_fill(s, x + 13, y + 14 + i * 6, 22, 2, 0x8b98aa);
-}
-
-static void icon_app(surface_t *s, int x, int y) {
-    draw_round_fill(s, x + 4, y, 40, 40, 8, COL_ACCENT);
-    draw_round_fill(s, x + 12, y + 8, 24, 24, 5, 0x0f2a2b);
-    draw_fill(s, x + 18, y + 18, 12, 4, COL_ACCENT_HI);
-}
-
 static void layout(void) {
     int gx = SIDE_W + 14, gy = TOP_H + 12;
     cols = (win_w - gx - 10) / CELL_W;
@@ -433,9 +414,8 @@ static void draw_browser(surface_t *s) {
         item_t *it = &items[i];
         int sel = i == selected, hov = hit(mouse_x, mouse_y, it->x, it->y, CELL_W - 8, CELL_H - 6);
         if (sel || hov) draw_round_fill(s, it->x, it->y, CELL_W - 8, CELL_H - 6, 6, sel ? COL_SELECT : COL_PANEL);
-        if (it->is_dir) icon_folder(s, it->x + 22, it->y + 8);
-        else if (it->is_app) icon_app(s, it->x + 22, it->y + 6);
-        else icon_file(s, it->x + 22, it->y + 6);
+        draw_icon(s, it->x + (CELL_W - 8 - ICON_SIZE) / 2, it->y + 3,
+                  it->is_dir ? ICON_FOLDER : (it->is_app ? ICON_APP : ICON_FILE));
         {
             int tw = text_width(it->name), maxw = CELL_W - 14;
             int tx = it->x + (tw < maxw ? (CELL_W - 8 - tw) / 2 : 3);
@@ -500,7 +480,7 @@ static void draw_dialog(surface_t *s) {
     draw_round_fill(s, x + 16, y + 46, w - 32, 28, 4, COL_EDGE);
     draw_round_fill(s, x + 17, y + 47, w - 34, 26, 3, COL_BG);
     draw_text_clip(s, x + 24, y + 52, dlg_input, COL_TEXT, w - 48);
-    draw_fill(s, x + 24 + dlg_cursor * GLYPH_W, y + 51, 2, GLYPH_H + 2, COL_ACCENT_HI);
+    draw_fill(s, x + 24 + text_width_n(dlg_input, dlg_cursor, FONT_SANS), y + 51, 2, GLYPH_H + 2, COL_ACCENT_HI);
     ui_button(s, x + w - 186, y + h - 40, 80, 26, "OK", 1, 0);
     ui_button(s, x + w - 96, y + h - 40, 80, 26, "Cancel", 0, 0);
 }
