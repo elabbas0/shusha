@@ -1087,10 +1087,12 @@ static void cmd_files(void) {
 }
 
 /* Find a file object by its (decrypted) name, or for locked files by the
- * owner rank given as "rank<N>".  Fills obj; returns 0. */
+ * owner rank given as "rank<N>".  Fills obj; returns 0, or -1 if nothing
+ * matched (*have_key then says whether any locked file was seen). */
 static int find_file(const char *want, uint8_t fk[32], int *have_key) {
     char names[2048];
     long n = sh_list_dir(WS_DIR "/files", names, sizeof(names));
+    int locked = 0;
     for (long i = 0; n > 0 && i < n;) {
         uint8_t id[16];
         char name[65];
@@ -1105,10 +1107,12 @@ static int find_file(const char *want, uint8_t fk[32], int *have_key) {
                 *have_key = file_key(fk, obj) == 0;
                 if (*have_key && decrypt_name(name, obj, fk) == 0 && str_eq(name, want)) return 0;
                 if (!*have_key && str_starts(want, "rank") && obj[OFF_OWNER] == (uint8_t)(want[4] - '0')) return 0;
+                locked |= !*have_key;
             }
         }
         i = j + 1;
     }
+    *have_key = locked;
     return -1;
 }
 
@@ -1117,7 +1121,9 @@ static void cmd_cat(const char *name) {
     int have;
     uint32_t size;
     if (find_file(name, fk, &have) != 0) {
-        say("no such shared file\n");
+        /* Names are encrypted too, so a locked file cannot be matched. */
+        say(have ? "no readable file by that name - locked files (names hidden) are listed by ws files\n"
+                 : "no such shared file\n");
         return;
     }
     if (!have) {

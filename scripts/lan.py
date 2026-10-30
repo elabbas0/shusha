@@ -26,8 +26,10 @@ KEYS = {" ": "spc", "/": "slash", ".": "dot", "-": "minus", "\n": "ret", ",": "c
 
 
 class Lan:
-    def __init__(self, n, iso=os.path.join(ROOT, "lan.iso"), mcast="230.0.0.1:1234", mem="256M"):
-        self.n, self.iso, self.mcast, self.mem = n, iso, mcast, mem
+    def __init__(self, n, iso=os.path.join(ROOT, "lan.iso"), mcast="230.0.0.1:1234", mem="256M", pcap=()):
+        """pcap: VM numbers whose network traffic is recorded to build/lan/vmK.pcap
+        (every VM receives the whole segment, so one capture sees all of it)."""
+        self.n, self.iso, self.mcast, self.mem, self.pcap = n, iso, mcast, mem, set(pcap)
         self.procs = {}
 
     def __enter__(self):
@@ -43,7 +45,7 @@ class Lan:
         return os.path.join(DIR, "vm%d.%s" % (k, ext))
 
     def boot(self, k):
-        for ext in ("log", "sock"):
+        for ext in ("log", "sock", "pcap"):
             if os.path.exists(self.path(k, ext)):
                 os.remove(self.path(k, ext))
         cmd = ["qemu-system-x86_64", "-cpu", "max", "-m", self.mem, "-cdrom", self.iso,
@@ -52,6 +54,8 @@ class Lan:
                "-monitor", "unix:%s,server,nowait" % self.path(k, "sock"),
                "-netdev", "socket,id=n0,mcast=%s,localaddr=127.0.0.1" % self.mcast,
                "-device", "e1000,netdev=n0,mac=52:54:00:12:00:%02x" % k]
+        if k in self.pcap:
+            cmd += ["-object", "filter-dump,id=f0,netdev=n0,file=" + self.path(k, "pcap")]
         self.procs[k] = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
     def stop(self, k=None):

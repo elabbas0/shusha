@@ -2,6 +2,7 @@
  * window system: the grid is sized to the window, only changed rows are
  * redrawn and presented, and it shares the shell's built-in commands. */
 #include "lib.h"
+#include "wsclient.h"
 #include "ui.h"
 
 #define COLS 84
@@ -130,7 +131,7 @@ static void execute(char *cmdline) {
     c = argv[0];
     if (str_eq(c, "help")) {
         out("help clear pwd cd ls cat echo mkdir touch write stat ps run random about exit\n"
-            "id su chmod chown\n"
+            "id su chmod chown ws\n"
             "any other word runs /apps/<word>.app (or a path)\n", FG_DIM);
     } else if (str_eq(c, "clear")) {
         clear_screen();
@@ -212,6 +213,15 @@ static void execute(char *cmdline) {
             out("\n", FG);
             mem_wipe(r, sizeof(r));
         }
+    } else if (str_eq(c, "ws")) {
+        /* Built in so the workspace service's answer lands in this window. */
+        static char ws_out[4096];
+        join_args(buf, sizeof(buf), argc, argv, 1);
+        long n = ws_call(buf, ws_out, sizeof(ws_out));
+        out(ws_out, n < 0 ? FG_ERR : FG);
+        /* Also to the system console: invisible on the GUI VT, but test
+         * builds mirror it to serial so multi-VM scripts can read it. */
+        print(ws_out);
     } else if (str_eq(c, "about")) {
         out("Shusha Terminal - kernel: ICDA (github.com/elabbas0/ICDA)\n", FG_DIM);
     } else if (str_eq(c, "exit")) {

@@ -91,12 +91,12 @@ $(B)/u/gen/wallpaper.asm.o: $(B)/gen/wallpaper.raw
 	printf 'section .rodata\nglobal wallpaper_raw\nalign 16\nwallpaper_raw: incbin "%s"\nsection .note.GNU-stack noalloc noexec nowrite progbits\n' $< > $(B)/gen/wallpaper.asm
 	$(ASM) -f elf64 $(B)/gen/wallpaper.asm -o $@
 $(B)/user/explorer.app: $(B)/u/apps/explorer.o $(UGUI_OBJ) $(ULIB_OBJ)
-$(B)/user/terminal.app: $(B)/u/apps/terminal.o $(UGUI_OBJ) $(ULIB_OBJ)
+$(B)/user/terminal.app: $(B)/u/apps/terminal.o $(B)/u/lib/wsclient.o $(UGUI_OBJ) $(ULIB_OBJ)
 $(B)/user/ipccheck.app: $(B)/u/tests/ipccheck.o $(ULIB_OBJ)
 $(B)/user/fscheck.app: $(B)/u/tests/fscheck.o $(ULIB_OBJ)
 $(B)/user/lanping.app: $(B)/u/tests/lanping.o $(ULIB_OBJ)
 $(B)/user/workspaced.app: $(B)/u/sbin/workspaced.o $(B)/u/lib/chan.o $(UCRYPTO) $(ULIB_OBJ)
-$(B)/user/ws.app: $(B)/u/apps/ws.o $(ULIB_OBJ)
+$(B)/user/ws.app: $(B)/u/apps/ws.o $(B)/u/lib/wsclient.o $(ULIB_OBJ)
 
 $(UAPPS): user/lib/user.ld
 	@mkdir -p $(dir $@)
