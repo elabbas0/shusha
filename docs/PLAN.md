@@ -7,6 +7,7 @@ real-time co-editing, working over LAN and internet with no paid servers.
 
 - Threat model: [THREAT_MODEL.md](THREAT_MODEL.md)
 - Workspace protocol: [WORKSPACE.md](WORKSPACE.md)
+- Encryption and decryption flows: [CRYPTO.md](CRYPTO.md)
 
 ## Requirements (from the project owner)
 
