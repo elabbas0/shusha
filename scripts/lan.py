@@ -21,7 +21,7 @@ import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DIR = os.environ.get("SHUSHA_LAN_DIR", os.path.join(ROOT, "build", "lan"))
-KEYS = {" ": "spc", "/": "slash", ".": "dot", "-": "minus", "\n": "ret", ",": "comma",
+KEYS = {" ": "spc", "/": "slash", ".": "dot", "-": "minus", "\n": "ret", "\t": "tab", ",": "comma",
         ":": "shift-semicolon", "_": "shift-minus", "=": "equal", "'": "apostrophe"}
 
 

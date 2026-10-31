@@ -29,6 +29,10 @@ int      sh_chown(const char *path, uint64_t uid);
 /* "rwxr-x---" style text for a mode (10 bytes incl. NUL). */
 char    *fmt_mode(char *buf, uint32_t mode);
 
+/* Console input: a line read without echo (passwords).  Returns its
+ * length; Backspace works, Enter ends it. */
+long     read_secret(char *buf, uint64_t cap);
+
 /* Split `line` in place on spaces; returns argc (at most max). */
 int      split_args(char *line, char **argv, int max);
 

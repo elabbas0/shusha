@@ -373,8 +373,10 @@ static void layout(void) {
     }
 }
 
-static const char *const places[][2] = {
-    { "Home", "/home" }, { "Root", "/" }, { "Apps", "/apps" }, { "Config", "/etc" }, { "Volumes", "/volumes" },
+/* "Home" is the signed-in user's own folder (the session starts there). */
+static char home_dir[PATH_CAP] = "/home";
+static const char *places[][2] = {
+    { "Home", home_dir }, { "Root", "/" }, { "Apps", "/apps" }, { "Config", "/etc" }, { "Volumes", "/volumes" },
 };
 #define NPLACES 5
 
@@ -692,6 +694,11 @@ static int hover_key(int mx, int my) {
 int main(int argc, char **argv) {
     ui_event_t ev;
 
+    if (sh_getuid() != 0 && sh_getcwd(home_dir, sizeof(home_dir)) >= 0 && str_starts(home_dir, "/home/")) {
+        str_copy(cwd, home_dir, sizeof(cwd));
+    } else {
+        str_copy(home_dir, "/home", sizeof(home_dir));
+    }
     if (argc > 1) str_copy(cwd, argv[1], sizeof(cwd));
     if (ui_open("Explorer", WANT_W, WANT_H) != 0) return 1;
     win_w = ui_surface()->w;

@@ -31,7 +31,16 @@ File ownership (Shusha, no new numbers):
 - Control files, used through `SYS_VFS_WRITE`/`SYS_VFS_READ`:
   `/dev/setuid` (write "<uid>"; root may pick any uid, others only their
   own; reading returns the caller's uid), `/dev/chmod` ("<octal> <path>",
-  owner or root), `/dev/chown` ("<uid> <path>", root only).
+  owner or root), `/dev/chown` ("<uid> <path>", root only), `/dev/killuid`
+  ("<uid>", root only, never 0: ends every program of that user - logout).
+
+Privileged calls (Shusha, no new numbers): non-root callers get -1 from
+`SYS_POWER`, `SYS_MOUNT`, `SYS_FORMAT_*`, `SYS_SET_PARTITION_ROLE`,
+`SYS_INSTALL_*`, `SYS_MAP_FRAMEBUFFER`, `SYS_GPU_PRESENT/CURSOR`; from
+the raw input calls (`SYS_INPUT_READ*`, `SYS_INPUT_READ_MOUSE`) while the
+desktop VT is active (desktop programs get input from the window
+manager); from `SYS_KILL/SUSPEND/RESUME` on another user's process; and
+from `SYS_SPAWN*`/`SYS_EXEC*` on a program file they may not read.
 
 Userspace networking (Shusha, no new numbers):
 

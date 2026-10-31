@@ -176,6 +176,7 @@ static void run_line(char *line) {
     if (argc == 0) return;
     c = argv[0];
     if (str_eq(c, "help")) cmd_help();
+    else if (str_eq(c, "exit") || str_eq(c, "logout")) sh_exit(0);
     else if (str_eq(c, "clear")) sh_clear();
     else if (str_eq(c, "pwd")) {
         char cwd[128];
@@ -238,7 +239,8 @@ static void run_line(char *line) {
 int main(void) {
     char line[LINE_MAX];
 
-    (void)sh_chdir("/home");
+    /* A signed-in user starts in their home (login sets it); root in /home. */
+    if (sh_getuid() == 0) (void)sh_chdir("/home");
     if (sh_read("/etc/motd.txt", io, sizeof(io)) > 0) print(io);
     print("shell ready\n");
     for (;;) {

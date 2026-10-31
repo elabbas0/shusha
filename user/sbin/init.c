@@ -1,15 +1,24 @@
 /* Shusha PID 1.
  *
  * The kernel spawns /sbin/init.app once per VT era with argv[1] set to
- * "gui" or "text".  Init runs the matching foreground program, waits for
- * it and exits with its code; the kernel respawns init (and drops to a
- * recovery console after repeated failures).  It also starts the
- * services (workspaced now; keyd and authd as they land).
+ * "gui" or "text".  Init starts the services (authd, workspaced), then
+ * the foreground program - the window manager, whose first window is the
+ * login screen, or the text login - waits for it and exits with its
+ * code; the kernel respawns init (and drops to a recovery console after
+ * repeated failures).
+ *
+ * Test images (make lan.iso) build this with SHUSHA_TEST_IMAGE: the text
+ * console then starts a root shell directly, so scripts can drive many
+ * machines.  Release images never contain that path.
  */
 #include "lib.h"
 
 int main(int argc, char **argv) {
+#ifdef SHUSHA_TEST_IMAGE
     const char *target = "/apps/shell.app";
+#else
+    const char *target = "/sbin/login.app";
+#endif
     sh_stat_t st;
     long pid;
 
@@ -18,7 +27,8 @@ int main(int argc, char **argv) {
     }
 
     /* Services.  A second copy (init is respawned per VT era) finds its
-     * port and control queue taken and exits. */
+     * queue or port taken and exits. */
+    if (sh_stat("/sbin/authd.app", &st) == 0) (void)sh_spawn("/sbin/authd.app");
     if (sh_stat("/sbin/workspaced.app", &st) == 0) (void)sh_spawn("/sbin/workspaced.app");
 
     pid = sh_spawn(target);

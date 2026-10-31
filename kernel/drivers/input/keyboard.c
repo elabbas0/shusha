@@ -105,6 +105,59 @@ static char apply_ctrl(char c) {
     return c;
 }
 
+/* ---- escape sequences (xterm conventions) ----------------------------
+ * Plain cursor keys keep the short forms (ESC [ A) every app already
+ * understands; with modifiers they carry xterm's parameter
+ * 1 + shift + 2*alt + 4*ctrl (ESC [ 1 ; 2 A is Shift+Up).  Keys with no
+ * byte of their own - Ctrl+/, Ctrl+Space, Ctrl+Shift+letter - use the
+ * "CSI u" form ESC [ <code> ; <mods> u.  Editors need all of these. */
+
+static int key_mods(void) {
+    return 1 + shift_down + 2 * alt_down + 4 * ctrl_down;
+}
+
+static void push_num(int v) {
+    char d[8];
+    int n = 0;
+    do {
+        d[n++] = (char)('0' + v % 10);
+        v /= 10;
+    } while (v && n < 8);
+    while (n) queue_push(d[--n]);
+}
+
+/* ESC [ X  or  ESC [ 1 ; m X */
+static void push_cursor(char final) {
+    int m = key_mods();
+    queue_push_seq("\x1b[");
+    if (m != 1) {
+        queue_push_seq("1;");
+        push_num(m);
+    }
+    queue_push(final);
+}
+
+/* ESC [ n ~  or  ESC [ n ; m ~ */
+static void push_tilde(int n) {
+    int m = key_mods();
+    queue_push_seq("\x1b[");
+    push_num(n);
+    if (m != 1) {
+        queue_push(';');
+        push_num(m);
+    }
+    queue_push('~');
+}
+
+/* ESC [ code ; m u */
+static void push_csi_u(int code) {
+    queue_push_seq("\x1b[");
+    push_num(code);
+    queue_push(';');
+    push_num(key_mods());
+    queue_push('u');
+}
+
 static char translate_scancode(uint8_t scancode) {
     char c;
 
@@ -143,33 +196,31 @@ static void keyboard_handle_scancode(uint8_t scancode) {
 
     if (extended_prefix) {
         extended_prefix = 0;
+        /* Right Ctrl / Right Alt behave like the left ones. */
+        if (scancode == 0x1D) { ctrl_down = 1; return; }
+        if (scancode == 0x9D) { ctrl_down = 0; return; }
+        if (scancode == 0x38) { alt_down = 1; return; }
+        if (scancode == 0xB8) { alt_down = 0; return; }
         if (scancode & 0x80) {
             return;
         }
         switch (scancode) {
-            case 0x48:
-                queue_push_seq("\x1b[A");
-                sched_wake_input_waiters();
-                return;
-            case 0x50:
-                queue_push_seq("\x1b[B");
-                sched_wake_input_waiters();
-                return;
-            case 0x4B:
-                queue_push_seq("\x1b[D");
-                sched_wake_input_waiters();
-                return;
-            case 0x4D:
-                queue_push_seq("\x1b[C");
-                sched_wake_input_waiters();
-                return;
-            case 0x53:
-                queue_push_seq("\x1b[3~");
-                sched_wake_input_waiters();
-                return;
-            default:
-                return;
+            case 0x48: push_cursor('A'); break;
+            case 0x50: push_cursor('B'); break;
+            case 0x4D: push_cursor('C'); break;
+            case 0x4B: push_cursor('D'); break;
+            case 0x47: push_cursor('H'); break;   /* Home */
+            case 0x4F: push_cursor('F'); break;   /* End */
+            case 0x52: push_tilde(2); break;      /* Insert */
+            case 0x53: push_tilde(3); break;      /* Delete */
+            case 0x49: push_tilde(5); break;      /* Page Up */
+            case 0x51: push_tilde(6); break;      /* Page Down */
+            case 0x1C: queue_push('\n'); break;   /* keypad Enter */
+            case 0x35: queue_push('/'); break;    /* keypad / */
+            default: return;
         }
+        sched_wake_input_waiters();
+        return;
     }
 
     if (scancode == 0x2A || scancode == 0x36) {
@@ -231,6 +282,36 @@ static void keyboard_handle_scancode(uint8_t scancode) {
     }
 
     if (scancode & 0x80) {
+        return;
+    }
+
+    /* F1-F4: ESC O P..S; F5-F11: ESC [ 15/17/18/19/20/21/23 ~ */
+    if ((scancode >= 0x3B && scancode <= 0x44) || scancode == 0x57) {
+        static const int tilde[] = { 15, 17, 18, 19, 20, 21 };
+        if (scancode <= 0x3E && key_mods() == 1) {
+            queue_push_seq("\x1bO");
+            queue_push((char)('P' + scancode - 0x3B));
+        } else if (scancode <= 0x3E) {
+            push_cursor((char)('P' + scancode - 0x3B));
+        } else {
+            push_tilde(scancode == 0x57 ? 23 : tilde[scancode - 0x3F]);
+        }
+        sched_wake_input_waiters();
+        return;
+    }
+    /* Shift+Tab */
+    if (scancode == 0x0F && shift_down) {
+        queue_push_seq("\x1b[Z");
+        sched_wake_input_waiters();
+        return;
+    }
+    /* Ctrl with a symbol or Space, and Ctrl+Shift+letter, have no byte of
+     * their own: send them in CSI u form. */
+    if (ctrl_down && scancode < 128 && keymap[scancode] > ' ' - 1 && keymap[scancode] != 27 &&
+        (!is_alpha(keymap[scancode]) || shift_down) && keymap[scancode] != '\b' && keymap[scancode] != '\t' &&
+        keymap[scancode] != '\n') {
+        push_csi_u(keymap[scancode]);
+        sched_wake_input_waiters();
         return;
     }
 

@@ -331,6 +331,7 @@ void draw_icon(surface_t *s, int x, int y, int icon) {
     case ICON_POWER: draw_image(s, x, y, icon_power, 16, 16, 16); break;
     case ICON_WORKSPACE: draw_image(s, x, y, icon_workspace, 48, 48, 48); break;
     case ICON_LOCK: draw_image(s, x, y, icon_lock, 16, 16, 16); break;
+    case ICON_CODE: draw_image(s, x, y, icon_code, 48, 48, 48); break;
     }
 }
 

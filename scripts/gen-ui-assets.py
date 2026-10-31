@@ -141,6 +141,17 @@ def draw_lock(d, s):
     d.ellipse((7 * s, 9.6 * s, 9 * s, 11.6 * s), fill=(90, 60, 20, 255))
 
 
+def draw_code(d, s):
+    # An editor: dark page, angle brackets and a slash.
+    rrect(d, (5 * s, 5 * s, 43 * s, 43 * s), 10 * s, (20, 90, 160, 255))
+    rrect(d, (5 * s, 5 * s, 43 * s, 37 * s), 10 * s, (37, 124, 204, 255))
+    w = int(3.2 * s)
+    col = (240, 248, 255, 255)
+    d.line([(18 * s, 16 * s), (11 * s, 24 * s), (18 * s, 32 * s)], fill=col, width=w, joint="curve")
+    d.line([(30 * s, 16 * s), (37 * s, 24 * s), (30 * s, 32 * s)], fill=col, width=w, joint="curve")
+    d.line([(26.5 * s, 13 * s), (21.5 * s, 35 * s)], fill=(255, 214, 90, 255), width=w)
+
+
 def gen_cursor():
     ss, W, H = 8, 24, 28
     pts = [(1, 1), (1, 18), (5.2, 14.2), (8.2, 21), (10.6, 20), (7.7, 13.4), (13.4, 13.4)]
@@ -167,7 +178,8 @@ for face in FACES:
 
 for name, fn, size in (("folder", draw_folder, 48), ("file", draw_file, 48), ("app", draw_app, 48),
                        ("terminal", draw_terminal, 48), ("power", draw_power, 16),
-                       ("workspace", draw_workspace, 48), ("lock", draw_lock, 16)):
+                       ("workspace", draw_workspace, 48), ("lock", draw_lock, 16),
+                       ("code", draw_code, 48)):
     emit("#define ICON_%s_SIZE %d" % (name.upper(), size))
     c_bytes("icon_%s" % name, premul(icon(fn, size)), "uint32_t")
 

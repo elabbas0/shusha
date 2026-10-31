@@ -153,3 +153,23 @@ char *fmt_mode(char *buf, uint32_t mode) {
     buf[9] = '\0';
     return buf;
 }
+
+long read_secret(char *buf, uint64_t cap) {
+    uint64_t n = 0;
+    for (;;) {
+        long c = sh_read_char();
+        if (c < 0) {
+            sh_sleep(2);
+            continue;
+        }
+        if (c == '\n' || c == '\r') break;
+        if (c == '\b' || c == 127) {
+            if (n) n--;
+        } else if (c >= 32 && c < 127 && n + 1 < cap) {
+            buf[n++] = (char)c;
+        }
+    }
+    buf[n] = '\0';
+    print("\n");
+    return (long)n;
+}

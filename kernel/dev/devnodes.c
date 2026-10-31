@@ -310,10 +310,10 @@ int dev_is_netinfo(vfs_node_t *node) {
 /* ---- identity / permission control files ----
  * Writes are served by syscall.c (sys_vfs_write); reading /dev/setuid
  * returns the caller's uid. */
-static vfs_node_t *dev_control_nodes[3];
+static vfs_node_t *dev_control_nodes[4];
 
 int dev_control_kind(vfs_node_t *node) {
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 4; i++) {
         if (node && node == dev_control_nodes[i]) return i + 1;
     }
     return DEV_CTL_NONE;
@@ -364,8 +364,8 @@ int dev_populate(void) {
     dev_netinfo_node = vfs_resolve(vfs_root(), "/dev/netinfo");
     vfs_node_set_mode(dev_udp_node, 0666);
     {
-        static const char *const names[3] = { "/dev/setuid", "/dev/chmod", "/dev/chown" };
-        for (int i = 0; i < 3; i++) {
+        static const char *const names[4] = { "/dev/setuid", "/dev/chmod", "/dev/chown", "/dev/killuid" };
+        for (int i = 0; i < 4; i++) {
             if (!vfs_resolve(vfs_root(), names[i]) && vfs_create(vfs_root(), names[i]) != 0) {
                 rc = -1;
             }

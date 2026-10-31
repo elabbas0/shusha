@@ -19,6 +19,7 @@
 #include "../ipc/shm.h"
 #include "../ipc/msgq.h"
 #include "../proc/sched.h"
+#include "../vt/vt.h"
 #include "../proc/user.h"
 #include "../net/net.h"
 #include "../memory/pmm.h"
@@ -203,7 +204,8 @@ static uint64_t parse_oct(const char **p) {
     return v;
 }
 
-/* Writes to /dev/setuid, /dev/chmod, /dev/chown.  `buf` is a kernel copy. */
+/* Writes to /dev/setuid, /dev/chmod, /dev/chown, /dev/killuid.  `buf` is
+ * a kernel copy. */
 static uint64_t control_write(process_t *proc, int kind, const char *buf, uint64_t size) {
     const char *p = buf;
     uint32_t uid = proc->ex_uid;
@@ -231,7 +233,41 @@ static uint64_t control_write(process_t *proc, int kind, const char *buf, uint64
         }
         return size;
     }
+    if (kind == DEV_CTL_KILLUID) {
+        /* Root only: ends a user's session (logout).  Never root itself. */
+        uint64_t victim = parse_dec(&p);
+        if (uid != 0 || p == buf || victim == 0 || victim > 0xffffffffULL) return (uint64_t)-1;
+        (void)sched_kill_uid((uint32_t)victim, 143);
+        return size;
+    }
     return (uint64_t)-1;
+}
+
+/* Shusha: machine-wide calls ICDA left open to every process.  Root (and
+ * the kernel) may make them; users may not touch disks, power, the
+ * framebuffer, or other users' programs, and on the desktop they get
+ * input only through the window manager - so no program can read the
+ * keystrokes typed into the login screen. */
+static int gate_denied(struct registers *regs) {
+    process_t *p = sched_current_process();
+    if (!p || p->kind != PROCESS_USER || p->ex_uid == 0) return 0;
+    switch (regs->rax) {
+    case SYS_POWER: case SYS_MOUNT: case SYS_FORMAT_DEVICE: case SYS_FORMAT_PARTITION:
+    case SYS_SET_PARTITION_ROLE: case SYS_INSTALL_SYSTEM: case SYS_INSTALL_DEVICE:
+    case SYS_INSTALL_PARTITIONS: case SYS_MAP_FRAMEBUFFER: case SYS_GPU_PRESENT: case SYS_GPU_CURSOR:
+        return 1;
+    case SYS_INPUT_READ: case SYS_INPUT_READLINE: case SYS_INPUT_READ_TIMEOUT: case SYS_INPUT_READ_MOUSE:
+        return vt_is_gui();
+    case SYS_SPAWN: case SYS_SPAWN_ARGS: case SYS_EXEC: case SYS_EXEC_ARGS: {
+        /* A program the caller may not read, it may not run either. */
+        const char *path = (const char *)(uintptr_t)regs->rdi;
+        vfs_node_t *node;
+        if (!path || !gate_path_ok(path)) return 0;
+        node = vfs_resolve(cwd_of(p), path);
+        return node && !may(p, node, VFS_R);
+    }
+    }
+    return 0;
 }
 
 /* /dev/netinfo: address configuration as text. */
@@ -1815,6 +1851,7 @@ uint64_t syscall_dispatch(struct registers *regs) {
 }
 
 static uint64_t syscall_dispatch_native(struct registers *regs) {
+    if (gate_denied(regs)) return (uint64_t)-1;
     switch (regs->rax) {
         case SYS_CONSOLE_WRITE:
             return sys_console_write((const char *)(uintptr_t)regs->rdi);

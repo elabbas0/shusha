@@ -14,6 +14,7 @@
 #include "lib.h"
 #include "draw.h"
 #include "ui_proto.h"
+#include "authproto.h"
 
 #define MAX_W     1920
 #define MAX_H     1200
@@ -43,6 +44,7 @@ typedef struct {
     int minimized;
     int anim;
     uint64_t anim_t0;
+    uint32_t uid;          /* owner, kernel-stamped */
     char title[UI_TITLE_MAX];
 } win_t;
 
@@ -76,7 +78,7 @@ enum { HV_NONE, HV_DOCK, HV_POWER, HV_CLOSE, HV_MIN, HV_MENU, HV_WS };
 static int hover_kind = HV_NONE, hover_idx = -1;
 
 static int power_open;
-static const menu_t power_menu = { { "Restart", "Power off" }, 2 };
+static menu_t power_menu = { { "Restart", "Power off" }, 2 };
 static char clock_text[16];
 
 /* ---- geometry ---------------------------------------------------------- */
@@ -115,8 +117,29 @@ static void anim_state(const win_t *w, uint32_t *alpha, int *dy) {
     }
 }
 
+/* ---- sessions -----------------------------------------------------------
+ * LOGIN: nobody signed in; only the login screen (uid GREETER_UID) is
+ * shown.  SESSION: one user's desktop.  LOCKED: that desktop is hidden
+ * and the login screen asks for the same user's password.  Only authd
+ * can move us from LOGIN or LOCKED to SESSION (UI_SESSION); windows are
+ * shown and given input only if they belong to the current mode, so no
+ * program can draw over or read the login screen. */
+enum { S_LOGIN, S_SESSION, S_LOCKED };
+static int smode = S_LOGIN;
+static uint32_t s_uid, s_flags;
+static char s_name[24];
+static uint64_t greeter_spawned;
+
+static void session_spawn(const char *path);
+static void session_lock(void);
+static void session_logout(void);
+
+static int in_mode(const win_t *w) {
+    return smode == S_SESSION ? w->uid != GREETER_UID : w->uid == GREETER_UID;
+}
+
 static int win_visible(const win_t *w) {
-    return w->used && (!w->minimized || w->anim == ANIM_RESTORE);
+    return w->used && in_mode(w) && (!w->minimized || w->anim == ANIM_RESTORE);
 }
 
 static rect_t frame_rect(const win_t *w) {
@@ -169,7 +192,7 @@ typedef struct {
     int win;           /* window index for plain-window entries */
 } dock_item_t;
 
-static dock_item_t dock[3 + MAX_WIN];
+static dock_item_t dock[4 + MAX_WIN];
 static int ndock;
 
 static int title_is(const win_t *w, const char *name) {
@@ -181,9 +204,10 @@ static void dock_build(void) {
     dock[ndock++] = (dock_item_t){ "Explorer", "/apps/explorer.app", ICON_FOLDER, -1 };
     dock[ndock++] = (dock_item_t){ "Terminal", "/apps/terminal.app", ICON_TERMINAL, -1 };
     dock[ndock++] = (dock_item_t){ "Workspace", "/apps/workspace.app", ICON_WORKSPACE, -1 };
+    dock[ndock++] = (dock_item_t){ "Code", "/apps/code.app", ICON_CODE, -1 };
     for (int i = 0; i < MAX_WIN; i++) {
-        if (!wins[i].used || title_is(&wins[i], "Explorer") || title_is(&wins[i], "Terminal") ||
-            title_is(&wins[i], "Workspace")) continue;
+        if (!wins[i].used || !in_mode(&wins[i]) || title_is(&wins[i], "Explorer") || title_is(&wins[i], "Terminal") ||
+            title_is(&wins[i], "Workspace") || title_is(&wins[i], "Code")) continue;
         dock[ndock++] = (dock_item_t){ wins[i].title, 0, ICON_APP, i };
     }
 }
@@ -208,7 +232,7 @@ static int dock_state(const dock_item_t *d) {
     int any = 0, shown = 0;
     for (int i = 0; i < MAX_WIN; i++) {
         const win_t *w = &wins[i];
-        if (!w->used || w->anim == ANIM_CLOSE) continue;
+        if (!w->used || !in_mode(w) || w->anim == ANIM_CLOSE) continue;
         if (d->win >= 0 ? i != d->win : !title_is(w, d->label)) continue;
         any = 1;
         if (!w->minimized) shown = 1;
@@ -273,8 +297,13 @@ static long parse_num(const char *p) {
 
 static void wss_read(void) {
     char buf[512];
-    long n = sh_read("/var/ws/status", buf, sizeof(buf) - 1);
+    sh_stat_t st;
+    long n;
     mem_set(&wss, 0, sizeof(wss));
+    /* Only in a session, and only that user's workspace (the status file
+     * belongs to whoever the workspace belongs to). */
+    if (smode != S_SESSION || sh_stat("/var/ws/status", &st) != 0 || (st.uid != 0 && st.uid != s_uid)) return;
+    n = sh_read("/var/ws/status", buf, sizeof(buf) - 1);
     if (n <= 0) return;
     buf[n] = '\0';
     wss.present = 1;
@@ -387,7 +416,7 @@ static void paint_window(surface_t *v, int ox, int oy, const win_t *w, int idx, 
         int tx = fx + (fw - (tw < max ? tw : max)) / 2;
         draw_text_clip_f(v, tx, fy + (TITLE_H - GLYPH_H) / 2, w->title, focused ? COL_TEXT : COL_MUTED, max, FONT_BOLD);
     }
-    for (int b = 0; b < 2; b++) {
+    for (int b = 0; b < 2 && w->uid != GREETER_UID; b++) {
         rect_t hb = title_button(w, b, dy);
         int cx = hb.x + 10 + ox, cy = hb.y + 10 + oy;
         int hov = (hover_kind == (b ? HV_MIN : HV_CLOSE)) && hover_idx == idx;
@@ -476,6 +505,12 @@ static void paint_panel(surface_t *v, int ox, int oy) {
         draw_text_f(v, c.x + c.w - text_width_f(clock_text, FONT_MONO) + ox, 7 + oy, clock_text, 0xb8c2cf, FONT_MONO);
     }
     paint_ws_status(v, ox, oy);
+    if (smode != S_LOGIN) {
+        rect_t c = clock_rect();
+        int tw = text_width_f(s_name, FONT_BOLD), x = c.x + c.w - text_width_f(clock_text, FONT_MONO) - tw - 40;
+        draw_circle(v, x - 10 + ox, PANEL_H / 2 + oy, 4, smode == S_LOCKED ? COL_WARN : 0x4ade80, 255);
+        draw_text_f(v, x + ox, 7 + oy, s_name, smode == S_LOCKED ? COL_MUTED : COL_TEXT, FONT_BOLD);
+    }
     {
         rect_t p = power_rect();
         if (hover_kind == HV_POWER || power_open) draw_rrect(v, p.x + ox, p.y + oy, p.w, p.h, 6, RR_ALL, 0xffffff, 30);
@@ -498,7 +533,7 @@ static void composite(rect_t r) {
         uint32_t alpha;
         rect_t b, part;
         const win_t *w = &wins[idx];
-        if (!win_visible(w) && w->anim != ANIM_MIN && w->anim != ANIM_CLOSE) continue;
+        if (!w->used || !in_mode(w) || (!win_visible(w) && w->anim != ANIM_MIN && w->anim != ANIM_CLOSE)) continue;
         b = win_bounds(w);
         if (!rect_intersect(b, r, &part)) continue;
         anim_state(w, &alpha, &dy);
@@ -520,7 +555,7 @@ static void composite(rect_t r) {
 
     {
         rect_t strip = { 0, screen.h - DOCK_H - DOCK_MARGIN - 40, screen.w, DOCK_H + DOCK_MARGIN + 40 }, tmp;
-        if (rect_intersect(strip, r, &tmp)) paint_dock(&v, ox, oy);
+        if (smode == S_SESSION && rect_intersect(strip, r, &tmp)) paint_dock(&v, ox, oy);
     }
     if (r.y < PANEL_H) paint_panel(&v, ox, oy);
     if (power_open) {
@@ -659,7 +694,7 @@ static void set_focus(int idx) {
 static void focus_next(void) {
     for (int k = zcount - 1; k >= 0; k--) {
         const win_t *w = &wins[zorder[k]];
-        if (w->used && !w->minimized && w->anim != ANIM_CLOSE && w->anim != ANIM_MIN) {
+        if (w->used && in_mode(w) && !w->minimized && w->anim != ANIM_CLOSE && w->anim != ANIM_MIN) {
             set_focus(zorder[k]);
             return;
         }
@@ -727,7 +762,7 @@ static void restore_window(int idx) {
     damage_dock();
 }
 
-static void open_window(const ui_msg_t *req, uint32_t pid) {
+static void open_window(const ui_msg_t *req, uint32_t pid, uint32_t uid) {
     char qname[48];
     ui_msg_t m;
     int idx = -1, w = req->open.w, h = req->open.h;
@@ -748,6 +783,9 @@ static void open_window(const ui_msg_t *req, uint32_t pid) {
     }
     if (w > screen.w - 40) w = screen.w - 40;
     if (h > max_h) h = max_h;
+    /* While nobody is signed in (or the screen is locked) only the login
+     * screen may open windows; nothing else can draw over it. */
+    if (smode != S_SESSION && uid != GREETER_UID) idx = -1;
     if (idx < 0 || w < 32 || h < 32) {
         m.type = UI_OPEN_FAIL;
         (void)sh_msg_send(q, &m);
@@ -769,6 +807,7 @@ static void open_window(const ui_msg_t *req, uint32_t pid) {
     win->used = 1;
     win->id = next_id++;
     win->pid = pid;
+    win->uid = uid;
     win->q = q;
     win->w = w;
     win->h = h;
@@ -779,6 +818,10 @@ static void open_window(const ui_msg_t *req, uint32_t pid) {
     if (win->x < 12) win->x = 12;
     if (win->x + w > screen.w - 12) win->x = screen.w - 12 - w;
     if (win->y + h > screen.h - DOCK_H - DOCK_MARGIN - 12) win->y = PANEL_H + TITLE_H + 12;
+    if (uid == GREETER_UID) {
+        win->x = (screen.w - w) / 2;
+        win->y = (screen.h - h) / 2 + TITLE_H / 2;
+    }
     str_copy(win->title, req->open.title, UI_TITLE_MAX);
     zorder[zcount++] = idx;
 
@@ -788,7 +831,7 @@ static void open_window(const ui_msg_t *req, uint32_t pid) {
     m.open_ok.h = h;
     send(win, &m);
     start_anim(idx, ANIM_OPEN);
-    set_focus(idx);
+    if (in_mode(win)) set_focus(idx);
     dock_build();
     damage_dock();
 }
@@ -836,7 +879,7 @@ static int step_animations(void) {
 static int window_at(int x, int y) {
     for (int k = zcount - 1; k >= 0; k--) {
         const win_t *w = &wins[zorder[k]];
-        if (!w->used || w->minimized || w->anim == ANIM_CLOSE) continue;
+        if (!w->used || !in_mode(w) || w->minimized || w->anim == ANIM_CLOSE) continue;
         if (rect_contains(frame_rect(w), x, y)) return zorder[k];
     }
     return -1;
@@ -861,7 +904,7 @@ static void dock_click(int i) {
         if (d->win >= 0 ? zorder[k] == d->win : title_is(w, d->label)) top = zorder[k];
     }
     if (top < 0) {
-        if (d->app) (void)sh_spawn(d->app);
+        if (d->app && smode == S_SESSION) session_spawn(d->app);
         return;
     }
     for (int k = zcount - 1; k >= 0; k--) { /* bring back a minimised one first */
@@ -874,6 +917,19 @@ static void dock_click(int i) {
         }
     }
     set_focus(top);
+}
+
+/* Focus a window titled `title`, or start the app as the session user. */
+static void dock_click_app(const char *title, const char *app) {
+    for (int k = zcount - 1; k >= 0; k--) {
+        const win_t *w = &wins[zorder[k]];
+        if (w->used && in_mode(w) && w->anim != ANIM_CLOSE && title_is(w, title)) {
+            if (w->minimized) restore_window(zorder[k]);
+            else set_focus(zorder[k]);
+            return;
+        }
+    }
+    session_spawn(app);
 }
 
 static void set_hover(int kind, int idx) {
@@ -906,7 +962,7 @@ static void update_hover(void) {
         set_hover(HV_WS, 0);
         return;
     }
-    for (int i = 0; i < ndock; i++) {
+    for (int i = 0; smode == S_SESSION && i < ndock; i++) {
         rect_t ic = dock_icon_rect(i);
         if (rect_contains(R(ic.x - 6, ic.y - 6, ic.w + 12, ic.h + 12), mouse_x, mouse_y)) {
             set_hover(HV_DOCK, i);
@@ -915,7 +971,7 @@ static void update_hover(void) {
     }
     {
         int idx = window_at(mouse_x, mouse_y);
-        if (idx >= 0 && mouse_y < wins[idx].y) {
+        if (idx >= 0 && mouse_y < wins[idx].y && wins[idx].uid != GREETER_UID) {
             for (int b = 0; b < 2; b++) {
                 if (rect_contains(title_button(&wins[idx], b, 0), mouse_x, mouse_y)) {
                     set_hover(b ? HV_MIN : HV_CLOSE, idx);
@@ -954,13 +1010,23 @@ static void mouse_event(const sh_mouse_t *e) {
             damage(menu_bounds(&power_menu, power_menu_x(), PANEL_H + 4));
             damage(power_rect());
             power_open = 0;
-            if (i == 0 || i == 1) {
+            if (i >= 0 && power_menu.count == 5 && i < 3) {
+                if (i == 0) dock_click_app("Accounts", "/apps/accounts.app");
+                else if (i == 1) session_lock();
+                else session_logout();
+            } else if (i >= 0) {
+                i -= power_menu.count == 5 ? 3 : 0;
                 (void)sh_sync();
                 (void)sh_power(i == 0 ? 1 : 0);
             }
             return;
         }
         if (hover_kind == HV_POWER && (pressed & UI_BTN_LEFT)) {
+            static const char *const session_items[] = { "Accounts", "Lock", "Log out", "Restart", "Power off" };
+            static const char *const login_items[] = { "Restart", "Power off" };
+            int n = smode == S_SESSION ? 5 : 2;
+            for (int k = 0; k < n; k++) power_menu.items[k] = n == 5 ? session_items[k] : login_items[k];
+            power_menu.count = n;
             power_open = 1;
             damage(menu_bounds(&power_menu, power_menu_x(), PANEL_H + 4));
             return;
@@ -990,7 +1056,7 @@ static void mouse_event(const sh_mouse_t *e) {
                     } else if (hover_kind == HV_MIN && hover_idx == idx) {
                         minimize_window(idx);
                         set_hover(HV_NONE, -1);
-                    } else {
+                    } else if (w->uid != GREETER_UID) {
                         drag = idx;
                         drag_dx = mouse_x - w->x;
                         drag_dy = mouse_y - w->y;
@@ -1027,7 +1093,7 @@ static int pump_input(void) {
     }
     while ((c = sh_read_char()) >= 0) {
         busy = 1;
-        if (focus >= 0 && !wins[focus].minimized) {
+        if (focus >= 0 && in_mode(&wins[focus]) && !wins[focus].minimized) {
             ui_msg_t m;
             mem_set(&m, 0, sizeof(m));
             m.type = UI_KEY;
@@ -1038,21 +1104,133 @@ static int pump_input(void) {
     return busy;
 }
 
+/* Run a program as the session user (or the login screen's uid): the
+ * root-only helper switches uid and directory, then starts it. */
+static void launch_as(uint32_t uid, const char *dir, const char *path, const char *args) {
+    char a[160], n[16];
+    str_copy(a, fmt_u64(n, uid, 10), sizeof(a));
+    str_cat(a, " ", sizeof(a));
+    str_cat(a, dir, sizeof(a));
+    str_cat(a, " ", sizeof(a));
+    str_cat(a, path, sizeof(a));
+    if (args && args[0]) {
+        str_cat(a, " ", sizeof(a));
+        str_cat(a, args, sizeof(a));
+    }
+    (void)sh_spawn_args("/sbin/launch.app", a);
+}
+
+static void session_spawn(const char *path) {
+    char home[40];
+    str_copy(home, "/home/", sizeof(home));
+    str_cat(home, s_name, sizeof(home));
+    launch_as(s_uid, home, path, 0);
+}
+
+static void spawn_greeter(void) {
+    char args[48];
+    if (smode == S_LOCKED) {
+        str_copy(args, "lock ", sizeof(args));
+        str_cat(args, s_name, sizeof(args));
+    } else {
+        str_copy(args, "login", sizeof(args));
+    }
+    greeter_spawned = sh_ticks();
+    launch_as(GREETER_UID, "/", "/sbin/greeter.app", args);
+}
+
+static void close_mode_windows(uint32_t uid_match, int greeter) {
+    for (int i = 0; i < MAX_WIN; i++) {
+        if (!wins[i].used || wins[i].anim == ANIM_CLOSE) continue;
+        if (greeter ? wins[i].uid == GREETER_UID : wins[i].uid == uid_match) close_window(i);
+    }
+}
+
+static void mode_changed(void) {
+    drag = capture = -1;
+    power_open = 0;
+    focus = -1;
+    focus_next();
+    dock_build();
+    damage(R(0, 0, screen.w, screen.h));
+}
+
+/* authd says this user signed in (or unlocked). */
+static void session_begin(const ui_msg_t *m) {
+    if (smode == S_LOGIN) {
+        s_uid = m->session.uid;
+        s_flags = m->session.flags;
+        str_copy(s_name, m->session.name, sizeof(s_name));
+        smode = S_SESSION;
+        close_mode_windows(0, 1);
+        mode_changed();
+        print("wm: session started for ");
+        print(s_name);
+        print("\n");
+        session_spawn("/apps/explorer.app");
+    } else if (smode == S_LOCKED && m->session.uid == s_uid) {
+        smode = S_SESSION;
+        close_mode_windows(0, 1);
+        mode_changed();
+        print("wm: unlocked\n");
+    }
+}
+
+static void session_lock(void) {
+    if (smode != S_SESSION) return;
+    smode = S_LOCKED;
+    mode_changed();
+    spawn_greeter();
+    print("wm: locked\n");
+}
+
+/* End every program of the user, then back to the login screen. */
+static void session_logout(void) {
+    char n[16];
+    if (smode == S_LOGIN) return;
+    (void)sh_write_file("/dev/killuid", fmt_u64(n, s_uid, 10), str_len(n));
+    close_mode_windows(s_uid, 0);
+    print("wm: signed out ");
+    print(s_name);
+    print("\n");
+    smode = S_LOGIN;
+    s_uid = s_flags = 0;
+    s_name[0] = '\0';
+    mode_changed();
+    spawn_greeter();
+}
+
+/* Keep a login screen up whenever one is needed. */
+static void greeter_watchdog(void) {
+    if (smode == S_SESSION || sh_ticks() - greeter_spawned < 400) return;
+    for (int i = 0; i < MAX_WIN; i++) {
+        if (wins[i].used && wins[i].uid == GREETER_UID && wins[i].anim != ANIM_CLOSE) return;
+    }
+    spawn_greeter();
+}
+
 static int pump_messages(uint64_t q) {
     ui_msg_t m;
-    long from;
+    long cred;
     int busy = 0;
 
-    while ((from = sh_msg_recv_from(q, &m)) > 0) {
+    while ((cred = sh_msg_recv_cred(q, &m)) > 0) {
         int idx;
+        uint32_t from = (uint32_t)((uint64_t)cred & 0xffffffffu), uid = (uint32_t)((uint64_t)cred >> 32);
         busy = 1;
         if (m.type == UI_OPEN) {
-            open_window(&m, (uint32_t)from);
+            open_window(&m, from, uid);
+            continue;
+        }
+        if (m.type == UI_SESSION) {
+            /* Only authd (the owner of its queue, running as root). */
+            uint64_t aq = sh_msg_open(AUTH_QUEUE);
+            if (aq && uid == 0 && sh_msg_owner(aq) == (long)from) session_begin(&m);
             continue;
         }
         idx = win_by_id(m.window);
         /* A window can only be damaged or closed by its own process. */
-        if (idx < 0 || wins[idx].pid != (uint32_t)from) continue;
+        if (idx < 0 || wins[idx].pid != from) continue;
         switch (m.type) {
         case UI_DAMAGE:
             if (!wins[idx].minimized) {
@@ -1111,7 +1289,7 @@ int main(void) {
     damage(R(0, 0, screen.w, screen.h));
     flush_damage();
     print("wm: desktop ready\n");
-    (void)sh_spawn("/apps/explorer.app");
+    spawn_greeter();
 
     for (;;) {
         int busy = pump_input();
@@ -1120,6 +1298,7 @@ int main(void) {
         if (sh_ticks() - last_tick >= 25) {
             last_tick = sh_ticks();
             reap_dead_windows();
+            greeter_watchdog();
             update_clock();
             update_ws_status();
         }

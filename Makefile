@@ -28,7 +28,8 @@ KERNEL_C   := $(filter-out kernel/drivers/audio/sb16.c,$(shell find kernel -name
 KERNEL_C   += $(wildcard crypto/*.c)
 KERNEL_ASM := kernel/boot.asm kernel/cpu/gdt_flush.asm kernel/cpu/isr.asm \
               kernel/proc/sched.asm kernel/proc/user_enter.asm
-KERNEL_OBJ := $(KERNEL_C:%.c=$(B)/k/%.o) $(KERNEL_ASM:%.asm=$(B)/k/%.asm.o) $(B)/k/userprogs.o
+KERNEL_BASE_OBJ := $(KERNEL_C:%.c=$(B)/k/%.o) $(KERNEL_ASM:%.asm=$(B)/k/%.asm.o)
+KERNEL_OBJ := $(KERNEL_BASE_OBJ) $(B)/k/userprogs.o
 
 # ---- userspace --------------------------------------------------------------
 # Each program: user/<dir>/<name>.c -> $(B)/user/<name>.app
@@ -36,7 +37,8 @@ KERNEL_OBJ := $(KERNEL_C:%.c=$(B)/k/%.o) $(KERNEL_ASM:%.asm=$(B)/k/%.asm.o) $(B)
 
 ULIB_OBJ := $(B)/u/lib/crt0.asm.o $(B)/u/lib/lib.o $(B)/u/lib/net.o $(B)/u/crypto/mem.o
 UGUI_OBJ := $(B)/u/lib/ui.o $(B)/u/lib/draw.o
-UPROGS   := init shell wm explorer terminal ipccheck fscheck lanping workspaced ws workspace
+UPROGS   := init shell wm explorer terminal ipccheck fscheck lanping workspaced ws workspace \
+            authd launch greeter login users accounts code
 UCRYPTO  := $(patsubst %,$(B)/u/crypto/%.o,aead chacha20 poly1305 sha2 ed25519 mlkem keccak wrap)
 
 USERPROGS := /sbin/init.app=$(B)/user/init.app \
@@ -49,7 +51,18 @@ USERPROGS := /sbin/init.app=$(B)/user/init.app \
              /apps/lanping.app=$(B)/user/lanping.app \
              /sbin/workspaced.app=$(B)/user/workspaced.app \
              /apps/ws.app=$(B)/user/ws.app \
-             /apps/workspace.app=$(B)/user/workspace.app
+             /apps/workspace.app=$(B)/user/workspace.app \
+             /sbin/authd.app=$(B)/user/authd.app \
+             /sbin/launch.app=$(B)/user/launch.app \
+             /sbin/greeter.app=$(B)/user/greeter.app \
+             /sbin/login.app=$(B)/user/login.app \
+             /apps/users.app=$(B)/user/users.app \
+             /apps/accounts.app=$(B)/user/accounts.app \
+             /apps/code.app=$(B)/user/code.app
+
+# Test images (lan.iso): same programs, but init starts a root shell on the
+# text console instead of the login, so scripts can drive the machines.
+USERPROGS_TEST := $(subst /sbin/init.app=$(B)/user/init.app,/sbin/init.app=$(B)/user/init-test.app,$(USERPROGS))
 
 UAPPS := $(UPROGS:%=$(B)/user/%.app)
 
@@ -99,6 +112,22 @@ $(B)/user/lanping.app: $(B)/u/tests/lanping.o $(ULIB_OBJ)
 $(B)/user/workspaced.app: $(B)/u/sbin/workspaced.o $(B)/u/lib/chan.o $(UCRYPTO) $(ULIB_OBJ)
 $(B)/user/ws.app: $(B)/u/apps/ws.o $(B)/u/lib/wsclient.o $(ULIB_OBJ)
 $(B)/user/workspace.app: $(B)/u/apps/workspace.o $(B)/u/lib/wsclient.o $(UGUI_OBJ) $(ULIB_OBJ)
+$(B)/user/authd.app: $(B)/u/sbin/authd.o $(B)/u/lib/svc.o $(B)/u/crypto/argon2.o $(B)/u/crypto/blake2b.o $(ULIB_OBJ)
+$(B)/user/launch.app: $(B)/u/sbin/launch.o $(ULIB_OBJ)
+$(B)/user/greeter.app: $(B)/u/sbin/greeter.o $(B)/u/lib/svc.o $(UGUI_OBJ) $(ULIB_OBJ)
+$(B)/user/login.app: $(B)/u/sbin/login.o $(B)/u/lib/svc.o $(ULIB_OBJ)
+$(B)/user/users.app: $(B)/u/apps/users.o $(B)/u/lib/svc.o $(ULIB_OBJ)
+$(B)/user/accounts.app: $(B)/u/apps/accounts.o $(B)/u/lib/svc.o $(UGUI_OBJ) $(ULIB_OBJ)
+$(B)/user/code.app: $(B)/u/apps/code.o $(B)/u/apps/code_lang.o $(B)/u/apps/code_emmet.o $(B)/u/lib/wsclient.o \
+                    $(UGUI_OBJ) $(ULIB_OBJ)
+
+$(B)/u/sbin/init-test.o: user/sbin/init.c
+	@mkdir -p $(dir $@)
+	$(CC) $(UCFLAGS) -DSHUSHA_TEST_IMAGE -c $< -o $@
+
+$(B)/user/init-test.app: $(B)/u/sbin/init-test.o $(ULIB_OBJ) user/lib/user.ld
+	@mkdir -p $(dir $@)
+	$(LD) -nostdlib -static -T user/lib/user.ld -o $@ $(filter %.o,$^)
 
 $(UAPPS): user/lib/user.ld
 	@mkdir -p $(dir $@)
@@ -112,9 +141,21 @@ $(B)/k/userprogs.o: $(B)/gen/userprogs.asm
 	@mkdir -p $(dir $@)
 	$(ASM) -f elf64 $< -o $@
 
+$(B)/gen/userprogs-test.asm: scripts/gen-initramfs.sh Makefile $(UAPPS) $(B)/user/init-test.app
+	@mkdir -p $(dir $@)
+	sh scripts/gen-initramfs.sh $@ $(USERPROGS_TEST)
+
+$(B)/k/userprogs-test.o: $(B)/gen/userprogs-test.asm
+	@mkdir -p $(dir $@)
+	$(ASM) -f elf64 $< -o $@
+
 $(B)/kernel.bin: $(KERNEL_OBJ) kernel/linker.ld
 	$(CC) -T kernel/linker.ld -o $@ -ffreestanding -O0 -nostdlib -fno-pie -no-pie \
 	      $(KERNEL_OBJ) -lgcc
+
+$(B)/kernel-test.bin: $(KERNEL_BASE_OBJ) $(B)/k/userprogs-test.o kernel/linker.ld
+	$(CC) -T kernel/linker.ld -o $@ -ffreestanding -O0 -nostdlib -fno-pie -no-pie \
+	      $(KERNEL_BASE_OBJ) $(B)/k/userprogs-test.o -lgcc
 
 shusha.iso: $(B)/kernel.bin boot/grub/grub.cfg
 	rm -rf $(B)/iso && mkdir -p $(B)/iso/boot/grub $(B)/iso/EFI/BOOT
@@ -134,9 +175,9 @@ qemu-headless: shusha.iso
 
 # ISO for the multi-machine LAN tests: boots to the text shell so each
 # VM's output can be read from its serial log (scripts/lan.py).
-lan.iso: $(B)/kernel.bin boot/grub/grub.cfg
+lan.iso: $(B)/kernel-test.bin boot/grub/grub.cfg
 	rm -rf $(B)/lan-iso && mkdir -p $(B)/lan-iso/boot/grub
-	cp $(B)/kernel.bin $(B)/lan-iso/boot/kernel.bin
+	cp $(B)/kernel-test.bin $(B)/lan-iso/boot/kernel.bin
 	sed 's|multiboot2 /boot/kernel.bin icda.live=1|multiboot2 /boot/kernel.bin icda.live=1 shusha.text|' \
 	    boot/grub/grub.cfg > $(B)/lan-iso/boot/grub/grub.cfg
 	grub-mkrescue -o $@ $(B)/lan-iso 2>/dev/null

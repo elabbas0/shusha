@@ -34,7 +34,9 @@ enum {
     UI_CLOSE,        /* both directions                          */
     UI_KEY,          /* wm -> client: one input byte             */
     UI_MOUSE,        /* wm -> client: window-local x, y, buttons */
-    UI_FOCUS         /* wm -> client: focused 0/1                */
+    UI_FOCUS,        /* wm -> client: focused 0/1                */
+    UI_SESSION       /* authd -> wm: start or unlock a session for uid
+                      * (honoured only from the owner of /auth/ctl) */
 };
 
 #define UI_BTN_LEFT   1
@@ -53,6 +55,7 @@ typedef struct {
         struct { uint32_t code; } key;
         struct { int32_t x, y; uint32_t buttons; } mouse;
         struct { uint32_t focused; } focus;
+        struct { uint32_t uid, flags; char name[24]; } session;
         uint8_t raw[56];
     };
 } ui_msg_t;

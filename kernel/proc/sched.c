@@ -82,6 +82,11 @@ static int sched_can_control(process_t *actor, process_t *target) {
     if (target->state == PROCESS_REAPED) {
         return 0;
     }
+    /* Shusha: a user may only stop, kill or resume their own programs;
+     * root (and the kernel) may control anyone in the session. */
+    if (actor->kind == PROCESS_USER && actor->ex_uid != 0 && actor->ex_uid != target->ex_uid) {
+        return 0;
+    }
     return actor->session_id == target->session_id;
 }
 
@@ -611,6 +616,18 @@ void sched_reap_orphans(void) {
         }
         p = next;
     }
+}
+
+/* End every live program of a user (logout).  Returns how many. */
+int sched_kill_uid(uint32_t uid, uint64_t exit_code) {
+    int n = 0;
+    for (process_t *p = process_list; p; p = p->next_all) {
+        if (p->kind == PROCESS_USER && p->ex_uid == uid && p->state != PROCESS_EXITED &&
+            p->state != PROCESS_REAPED && sched_kill_process(p->pid, exit_code) == 0) {
+            n++;
+        }
+    }
+    return n;
 }
 
 int sched_kill_process(uint64_t pid, uint64_t exit_code) {
