@@ -89,7 +89,7 @@ Each phase has an exit test that must pass in QEMU before the next one starts.
 | 5. Encrypted files | v1 done on LAN: rank-key chain, per-file keys, owner-signed replicated objects, request/grant, reads with the admin offline, workspace bound to one local user, personal files only enter when that user adds them (`scripts/ws-lan-test.py`, 38 checks). Removal and rekeying to do. |
 | Workspace GUI | Workspace app, live top-bar status (presence, events, sync progress, request badge), dock entry; `scripts/ws-gui-demo.py` drives it on three desktops. |
 | 2. Local multi-user | Done except keyd/encrypted homes: authd (Argon2id + pepper, lockout, recovery keys, admin re-auth), unprivileged login/lock screen, WM sessions, text login, Accounts app, private homes and files by default, privileged syscalls gated (docs/ACCOUNTS.md, `scripts/auth-test.py`, 26 checks + seccheck). |
-| Editor | Code: VS Code-style editor with language recognition, syntax colouring, Emmet, suggestions, palette, find/replace, minimap; edits encrypted workspace files in place with versioning (docs/EDITOR.md, `make editor-test`, 43 checks; workspace editing in `ws-lan-test.py`, 44 checks). |
+| Editor | Qələm: Shusha's own editor design (library with workspace owners by rank, document pills, card with outline and overview ribbon, finder, "Şuşa night" colours) with language recognition, syntax colouring, Emmet, suggestions, find/replace, outline; edits encrypted workspace files in place with versioning (docs/EDITOR.md, `make editor-test`, 43 checks; workspace editing in `ws-lan-test.py`, 44 checks). |
 | UI | New compositor (`wm`), client library, Explorer and Terminal ported from ICDA. |
 
 ### Gaps found while building
@@ -103,6 +103,7 @@ Each phase has an exit test that must pass in QEMU before the next one starts.
 - **New files were world-readable** (0644 by default) in a shared `/home`. Files and folders created by user processes now start private (0600/0700); boot-time and system-image nodes keep 0644/0755.
 - **A denied `read_at` returned 0**, indistinguishable from an empty file (the first separation test caught `ws put` of a root-only file "sharing" 0 bytes). It now returns -1.
 - **Most machine-wide syscalls were open to every process** (kill any program, format disks, power off, map the framebuffer, read raw keystrokes). They are now root-only (kill: own processes only; input: not while the desktop is active).
+- **The timer interrupt was acknowledged after the scheduler ran.** When it switched to a thread that had slept in a system call, that thread returned to user mode with the timer still unacknowledged, so no more ticks arrived until something blocked: any busy program (Argon2id, the editor redrawing, replication) froze the machine. The timer is now acknowledged before the scheduler runs.
 - **Display mode** follows whatever GRUB sets (800x600 in QEMU), by ICDA's design for monitor compatibility.
 
 ## Decisions

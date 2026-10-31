@@ -205,10 +205,10 @@ static void dock_build(void) {
     dock[ndock++] = (dock_item_t){ "Explorer", "/apps/explorer.app", ICON_FOLDER, -1 };
     dock[ndock++] = (dock_item_t){ "Terminal", "/apps/terminal.app", ICON_TERMINAL, -1 };
     dock[ndock++] = (dock_item_t){ "Workspace", "/apps/workspace.app", ICON_WORKSPACE, -1 };
-    dock[ndock++] = (dock_item_t){ "Code", "/apps/code.app", ICON_CODE, -1 };
+    dock[ndock++] = (dock_item_t){ "Qələm", "/apps/code.app", ICON_CODE, -1 };
     for (int i = 0; i < MAX_WIN; i++) {
         if (!wins[i].used || !in_mode(&wins[i]) || title_is(&wins[i], "Explorer") || title_is(&wins[i], "Terminal") ||
-            title_is(&wins[i], "Workspace") || title_is(&wins[i], "Code")) continue;
+            title_is(&wins[i], "Workspace") || title_is(&wins[i], "Qələm")) continue;
         dock[ndock++] = (dock_item_t){ wins[i].title, 0, ICON_APP, i };
     }
 }

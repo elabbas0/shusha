@@ -323,11 +323,11 @@ static void perform(int action, int arg) {
     case A_FOCUS: focus_field = arg; break;
     case A_BACK: viewing = -1; break;
     case A_EDIT: {
-        /* Code decrypts it into its own memory through workspaced. */
+        /* Qələm decrypts it into its own memory through workspaced. */
         char a[48];
         str_copy(a, "ws:", sizeof(a));
         str_cat(a, files[arg].id, sizeof(a));
-        set_message(sh_spawn_args("/apps/code.app", a) < 0 ? "Could not start Code" : "Opening in Code...");
+        set_message(sh_spawn_args("/apps/code.app", a) < 0 ? "Could not start Qələm" : "Opening in Qələm...");
         break;
     }
     }

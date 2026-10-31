@@ -29,4 +29,10 @@ const char *const *lang_words(int lang);
 /* Emmet works in these. */
 int         lang_emmet(int lang);
 
+/* Outline: if this line defines something worth listing (a function,
+ * class, heading, CSS rule, element with an id...), write its label and
+ * return its kind (> 0); else 0. */
+enum { SYM_FUNC = 1, SYM_CLASS, SYM_HEADING, SYM_TAG, SYM_RULE, SYM_KEY, SYM_MACRO };
+int         lang_symbol(int lang, const char *s, int n, char *label, int cap);
+
 #endif

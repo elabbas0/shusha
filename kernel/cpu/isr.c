@@ -187,6 +187,18 @@ void irq_handler(struct registers* regs) {
         return;
     }
 
+    /* The timer's handler runs the scheduler, which may switch to a thread
+     * that resumes outside this function (one that slept in a system call)
+     * and goes straight back to user mode.  Acknowledge the timer first:
+     * ICDA did it afterwards, so the timer stayed masked until something
+     * blocked again, and any program busy computing froze the machine.
+     * (Interrupts stay off until iretq, so this cannot nest.) */
+    if (irq == 0) {
+        irq_controller_eoi(0);
+        if (irq_handlers[0]) irq_handlers[0](regs);
+        return;
+    }
+
     if (irq >= 0 && irq < 16 && irq_handlers[irq]) {
         irq_handlers[irq](regs);
     }

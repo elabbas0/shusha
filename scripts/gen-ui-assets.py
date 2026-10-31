@@ -142,14 +142,15 @@ def draw_lock(d, s):
 
 
 def draw_code(d, s):
-    # An editor: dark page, angle brackets and a slash.
-    rrect(d, (5 * s, 5 * s, 43 * s, 43 * s), 10 * s, (20, 90, 160, 255))
-    rrect(d, (5 * s, 5 * s, 43 * s, 37 * s), 10 * s, (37, 124, 204, 255))
-    w = int(3.2 * s)
-    col = (240, 248, 255, 255)
-    d.line([(18 * s, 16 * s), (11 * s, 24 * s), (18 * s, 32 * s)], fill=col, width=w, joint="curve")
-    d.line([(30 * s, 16 * s), (37 * s, 24 * s), (30 * s, 32 * s)], fill=col, width=w, joint="curve")
-    d.line([(26.5 * s, 13 * s), (21.5 * s, 35 * s)], fill=(255, 214, 90, 255), width=w)
+    # Qələm, the editor: a gold pen nib on the emblem's deep purple.
+    rrect(d, (5 * s, 5 * s, 43 * s, 43 * s), 10 * s, (60, 12, 78, 255))
+    rrect(d, (5 * s, 5 * s, 43 * s, 37 * s), 10 * s, (92, 22, 116, 255))
+    d.polygon([(24 * s, 9 * s), (34 * s, 22 * s), (24 * s, 41 * s), (14 * s, 22 * s)], fill=(242, 196, 82, 255))
+    d.polygon([(24 * s, 9 * s), (34 * s, 22 * s), (24 * s, 22 * s)], fill=(250, 222, 140, 255))
+    d.line([(24 * s, 24 * s), (24 * s, 40 * s)], fill=(70, 30, 20, 255), width=int(1.6 * s))
+    r = 2.4
+    d.ellipse(((24 - r) * s, (22 - r) * s, (24 + r) * s, (22 + r) * s), fill=(70, 30, 20, 255))
+    d.ellipse((35 * s, 34 * s, 39 * s, 38 * s), fill=(233, 52, 246, 255))
 
 
 def gen_cursor():

@@ -80,6 +80,31 @@ int main(void) {
         checks++;
         if (lang_line(L_C, "/* open", 7, 0, cls) != 1) fails++, printf("FAIL block comment state\n");
     }
+    {
+        /* outline */
+        static const struct { int lang; const char *line, *label; int kind; } sy[] = {
+            { L_C, "int main(int argc, char **argv) {", "main", SYM_FUNC },
+            { L_C, "    return f(x);", 0, 0 },
+            { L_C, "static void draw(void);", 0, 0 },
+            { L_PY, "def greet(name):", "greet", SYM_FUNC },
+            { L_PY, "class Shop:", "Shop", SYM_CLASS },
+            { L_JS, "export function render(app) {", "render", SYM_FUNC },
+            { L_JS, "const add = (a, b) => a + b;", "add", SYM_FUNC },
+            { L_HTML, "<h1>Shusha Workspace</h1>", "Shusha Workspace", SYM_HEADING },
+            { L_HTML, "<div id=\"app\" class=\"x\">", "div#app", SYM_TAG },
+            { L_CSS, ".card > h2 {", ".card > h2", SYM_RULE },
+            { L_MD, "## Install", "Install", SYM_HEADING },
+        };
+        for (unsigned i = 0; i < sizeof(sy) / sizeof(sy[0]); i++) {
+            char label[64] = "";
+            int k = lang_symbol(sy[i].lang, sy[i].line, (int)strlen(sy[i].line), label, sizeof(label));
+            checks++;
+            if (k != sy[i].kind || (sy[i].label && strcmp(label, sy[i].label) != 0)) {
+                fails++;
+                printf("FAIL outline %s -> %d %s\n", sy[i].line, k, label);
+            }
+        }
+    }
     printf("%d/%d editor checks passed\n", checks - fails, checks);
     return fails != 0;
 }

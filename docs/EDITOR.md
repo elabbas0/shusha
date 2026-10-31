@@ -1,8 +1,48 @@
-# Code: the editor
+# Qələm: the editor
 
-`user/apps/code.c` (plus `code_lang.c` and `code_emmet.c`) is modelled on
-Visual Studio Code. Open it from the dock, or with "Edit" on a file in the
-Workspace app.
+Qələm ("pen" in Azerbaijani) is Shusha's code and text editor:
+`user/apps/code.c`, plus `code_lang.c` and `code_emmet.c`. Open it from the
+dock (the gold nib), or with "Edit" on a file in the Workspace app.
+
+## Design
+
+Qələm has its own look, built from Shusha's visual language rather than
+copied from another editor.
+
+- **Library (left).**
+  - The **workspace** lists every shared file with a language badge. Each
+    file shows its owner as an avatar coloured by rank. Files you cannot
+    open show a padlock, and their names are hidden.
+  - **Home** holds your private files.
+  - A note at the bottom says workspace files are decrypted in memory only.
+- **Header.** Open documents are rounded pills with two-letter language
+  badges and a gold dot for unsaved changes. "Find a file or action" sits
+  at the right.
+- **The document card.**
+  - Its header shows where the file lives (`shusha-team / index.html` with
+    a padlock, or `~ / notes.md`) and has Find, Outline and Save buttons.
+  - The text has a gold bar on the current line, gold underlines for
+    matching brackets, dotted indentation guides, and amber find matches.
+  - Footer capsules show the location ("encrypted · shusha-team" in plum,
+    or "private · home" in mint) and Ln/Col, language, Emmet and
+    indentation.
+  - Messages appear as toasts above the footer.
+- **Outline (right).** Functions, classes, headings, landmarks, CSS rules,
+  JSON keys and macros of the document. The symbol you are in is marked;
+  clicking one jumps to it. The thin overview ribbon beside the text shows
+  where you are and where the find matches are.
+- **The finder (F1 / Ctrl+P).** A centred spotlight over a dimmed window.
+  Results are grouped as Actions and Files, with shortcuts drawn as
+  keycaps.
+- **Colours: "Şuşa night."**
+  - magenta keywords and tags;
+  - rose control flow;
+  - gold functions and attributes;
+  - green strings;
+  - amber numbers;
+  - teal types and properties.
+
+  All taken from the Xarıbülbül emblem and Shusha's accent.
 
 ## Files
 
@@ -30,7 +70,7 @@ Workspace app.
   and CSS rules.
 - **Colouring:** each language has its own tokenizer, which carries state
   between lines (block comments, docstrings, open CSS blocks, HTML tags,
-  fenced code). Colours follow VS Code's Dark+ theme.
+  fenced code). Colours are "Şuşa night" (see Design).
 - **Changing it:** click the language in the status bar, or run "Change
   Language Mode".
 
@@ -61,19 +101,23 @@ shows "Emmet Abbreviation" with a preview of the result.
 - **Enter** keeps the indentation and adds a level after `{ [ (`, a
   Python `:` or an HTML tag. Between a pair it splits onto three lines.
 - **Backspace** deletes a whole indentation step, or an empty pair.
-- **Suggestions:** Emmet, language snippets (`for`, `main`, `def`, `log`,
+- **Suggestions:** Emmet (only for real tags or abbreviations with
+  operators, so plain words in text stay plain), language snippets (`for`, `main`, `def`, `log`,
   `ifmain`, …), keywords, and words already in the file.
-- **On screen:** bracket matching, indentation guides, current-line
-  highlight, minimap, find highlights, breadcrumbs, and a status bar (Ln/Col,
-  spaces, encoding, language, Emmet, read-only).
-- **Undo** groups typing into words, like VS Code.
+- **On screen:** bracket matching, indentation guides, the current line,
+  the outline, the overview ribbon, find highlights and footer capsules (see
+  Design).
+- **Undo** groups typing into words.
 
 ## Keys
 
+The shortcuts are the ones most code editors share, so they need no
+relearning.
+
 | Keys | Action |
 |---|---|
-| F1 or Ctrl+Shift+P | Command palette |
-| Ctrl+P | Go to file (quick open) |
+| F1 or Ctrl+Shift+P | The finder: actions and files |
+| Ctrl+P | The finder: files first |
 | Ctrl+N / Ctrl+S / Ctrl+W | New / save / close |
 | Ctrl+Z / Ctrl+Y (Ctrl+Shift+Z) | Undo / redo |
 | Ctrl+F / Ctrl+R / F3, Shift+F3 | Find / replace / next, previous |
@@ -89,24 +133,24 @@ shows "Emmet Abbreviation" with a preview of the result.
 | Ctrl+Left / Ctrl+Right | Move by word (with Shift: select) |
 | Home / End / Ctrl+Home / Ctrl+End / PgUp / PgDn | Navigate (Home is smart) |
 | Ctrl+PgUp / Ctrl+PgDn | Previous / next tab |
-| Ctrl+B / Ctrl+Shift+E / Ctrl+Shift+F | Toggle side bar / Explorer / Search |
+| Ctrl+B / Ctrl+Shift+O | Show or hide the library / the outline |
 
 The keyboard driver sends xterm-style sequences (modifier parameters, CSI
 u for Ctrl+symbols), so these combinations reach the editor.
 
-Some shortcuts differ from VS Code:
+A few keys cannot be bound:
 - Ctrl+H is Backspace on this keyboard, so replace is Ctrl+R.
 - Ctrl+I and Ctrl+J are Tab and Enter.
 
 ## Tests
 
-`make editor-test` runs 43 host checks: Emmet HTML/CSS expansions,
-language recognition, and tokenizer spot checks.
+`make editor-test` runs 54 host checks: Emmet HTML/CSS expansions,
+language recognition, tokenizer spot checks and outline symbols.
 
 ## Not yet
 
 - Multiple cursors.
 - Mouse-wheel scrolling (the PS/2 mouse reports no wheel). Use the
-  keyboard, the minimap or the scrollbar.
+  keyboard, the outline or the overview ribbon.
 - A language server: suggestions are lexical, not semantic.
 - Live co-editing with presence (planned; WORKSPACE.md §4).

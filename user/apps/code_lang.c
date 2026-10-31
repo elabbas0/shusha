@@ -527,3 +527,155 @@ int lang_line(int lang, const char *s, int n, int state, uint8_t *cls) {
         return 0;
     }
 }
+
+/* ---- outline -------------------------------------------------------------- */
+
+static int word_at(const char *s, int n, int i, char *out, int cap) {
+    int k = 0;
+    while (i < n && (s[i] == ' ' || s[i] == '\t')) i++;
+    while (i < n && (is_id(s[i]) || s[i] == '.' || s[i] == '-') && k < cap - 1) out[k++] = s[i++];
+    out[k] = '\0';
+    return k;
+}
+
+static int starts(const char *s, int n, int i, const char *w) {
+    int k = 0;
+    while (w[k] && i + k < n && s[i + k] == w[k]) k++;
+    return !w[k] && (i + k >= n || !is_id(s[i + k]));
+}
+
+static int copy_trim(char *out, int cap, const char *s, int n) {
+    int a = 0, k = 0;
+    while (a < n && (s[a] == ' ' || s[a] == '\t')) a++;
+    while (n > a && (s[n - 1] == ' ' || s[n - 1] == '{' || s[n - 1] == '\r')) n--;
+    for (int i = a; i < n && k < cap - 1; i++) out[k++] = s[i];
+    out[k] = '\0';
+    return k;
+}
+
+int lang_symbol(int lang, const char *s, int n, char *label, int cap) {
+    int i = 0;
+    while (i < n && (s[i] == ' ' || s[i] == '\t')) i++;
+    if (i >= n) return 0;
+    switch (lang) {
+    case L_PY:
+        if (starts(s, n, i, "def") && word_at(s, n, i + 3, label, cap)) return SYM_FUNC;
+        if (starts(s, n, i, "async") && starts(s, n, i + 6, "def") && word_at(s, n, i + 9, label, cap)) return SYM_FUNC;
+        if (starts(s, n, i, "class") && word_at(s, n, i + 5, label, cap)) return SYM_CLASS;
+        return 0;
+    case L_JS:
+        if (starts(s, n, i, "export")) i += 6;
+        if (starts(s, n, i, " default")) i += 8;
+        while (i < n && s[i] == ' ') i++;
+        if (starts(s, n, i, "async")) i += 6;
+        while (i < n && s[i] == ' ') i++;
+        if (starts(s, n, i, "function") && word_at(s, n, i + 8, label, cap)) return SYM_FUNC;
+        if (starts(s, n, i, "class") && word_at(s, n, i + 5, label, cap)) return SYM_CLASS;
+        if ((starts(s, n, i, "const") || starts(s, n, i, "let")) && word_at(s, n, i + (s[i] == 'c' ? 5 : 3), label, cap)) {
+            for (int k = i; k + 1 < n; k++) {
+                if ((s[k] == '=' && s[k + 1] == '>') || starts(s, n, k, "function")) return SYM_FUNC;
+            }
+        }
+        return 0;
+    case L_C: {
+        /* "type name(args)" at the start of a line, not a call or prototype */
+        int open = -1, k;
+        if (s[i] == '#') {
+            if (starts(s, n, i + 1, "define") && word_at(s, n, i + 7, label, cap)) return SYM_MACRO;
+            return 0;
+        }
+        if (i > 0 || starts(s, n, 0, "return") || starts(s, n, 0, "if") || starts(s, n, 0, "else")) return 0;
+        if ((starts(s, n, 0, "struct") || starts(s, n, 0, "typedef")) && s[n - 1] == '{') {
+            copy_trim(label, cap, s, n);
+            return SYM_CLASS;
+        }
+        for (k = 0; k < n; k++) {
+            if (s[k] == '(') {
+                open = k;
+                break;
+            }
+            if (s[k] == '=' || s[k] == ';') return 0;
+        }
+        if (open <= 0 || s[n - 1] == ';') return 0;
+        k = open;
+        while (k > 0 && s[k - 1] == ' ') k--;
+        {
+            int e = k;
+            while (k > 0 && is_id(s[k - 1])) k--;
+            if (e == k || k == 0) return 0; /* needs a return type in front */
+            copy_trim(label, cap, s + k, e - k);
+        }
+        return SYM_FUNC;
+    }
+    case L_SH: {
+        int k = i;
+        if (starts(s, n, i, "function") && word_at(s, n, i + 8, label, cap)) return SYM_FUNC;
+        while (k < n && (is_id(s[k]) || s[k] == '-')) k++;
+        if (k > i && k + 1 < n && s[k] == '(' && s[k + 1] == ')') {
+            copy_trim(label, cap, s + i, k - i);
+            return SYM_FUNC;
+        }
+        return 0;
+    }
+    case L_MD:
+        if (s[i] == '#') {
+            int depth = 0;
+            while (i < n && s[i] == '#') i++, depth++;
+            copy_trim(label, cap, s + i, n - i);
+            return depth <= 3 && label[0] ? SYM_HEADING : 0;
+        }
+        return 0;
+    case L_CSS:
+        if (s[n - 1] == '{' || (n > 1 && s[n - 1] == ' ' && s[n - 2] == '{')) {
+            copy_trim(label, cap, s, n);
+            return label[0] ? SYM_RULE : 0;
+        }
+        return 0;
+    case L_JSON:
+        if (i > 0 && i <= 4 && s[i] == '"') {
+            int k = i + 1, o = 0;
+            while (k < n && s[k] != '"' && o < cap - 1) label[o++] = s[k++];
+            label[o] = '\0';
+            return o ? SYM_KEY : 0;
+        }
+        return 0;
+    case L_HTML: {
+        /* headings with their text, landmarks, and elements with an id */
+        static const char *const marks[] = { "header", "nav", "main", "section", "article", "aside", "footer",
+                                             "form", "table", 0 };
+        char tag[16];
+        int k;
+        if (s[i] != '<' || i + 1 >= n || !is_id0(s[i + 1])) return 0;
+        word_at(s, n, i + 1, tag, sizeof(tag));
+        if (tag[0] == 'h' && tag[1] >= '1' && tag[1] <= '3' && !tag[2]) {
+            int a = i, b;
+            while (a < n && s[a] != '>') a++;
+            b = a + 1;
+            while (b < n && s[b] != '<') b++;
+            if (a < n && b > a + 1) {
+                copy_trim(label, cap, s + a + 1, b - a - 1);
+                return SYM_HEADING;
+            }
+        }
+        for (k = i; k + 3 < n && s[k] != '>'; k++) {
+            if (s[k] == 'i' && s[k + 1] == 'd' && s[k + 2] == '=' && s[k + 3] == '"') {
+                int e = k + 4, o;
+                str_copy(label, tag, (uint64_t)cap);
+                o = (int)str_len(label);
+                if (o < cap - 1) label[o++] = '#';
+                while (e < n && s[e] != '"' && o < cap - 1) label[o++] = s[e++];
+                label[o] = '\0';
+                return SYM_TAG;
+            }
+        }
+        for (k = 0; marks[k]; k++) {
+            if (str_eq(tag, marks[k])) {
+                str_copy(label, tag, (uint64_t)cap);
+                return SYM_TAG;
+            }
+        }
+        return 0;
+    }
+    }
+    return 0;
+}
