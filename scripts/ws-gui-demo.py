@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
-"""GUI demo of the Workspace on three QEMU machines, with screenshots.
+"""GUI demo on three QEMU machines: accounts, the Workspace and Code.
 
     make SERIAL_MIRROR=1 shusha.iso && python3 scripts/ws-gui-demo.py [outdir]
 
-Boots three desktops on one virtual LAN and drives the Workspace app with
-the mouse and keyboard - create, invite, join, share, locked file, access
-request and grant, admin going offline, another local user refused -
-saving a screenshot after each step (docs/poc/README.md).  vm3's network
-traffic is recorded to build/lan/vm3.pcap for scripts/wire-check.py.
-Invite codes and progress are read from the serial log (test builds
-mirror the console there).
+Boots three desktops on one virtual LAN and drives them with the mouse
+and keyboard: first-boot account setup and sign-in, an administrator
+adding a local user, creating and joining the workspace, writing HTML
+with Emmet in Code and saving it as an encrypted workspace file, an edit
+by a higher rank arriving live, a locked file, request and grant, a
+read-only editor, CSS/Python editing, the command palette, the lock
+screen, and another local user who sees nothing of the workspace.  A
+screenshot is saved after each step (docs/poc/README.md); vm3's traffic
+goes to build/lan/vm3.pcap for scripts/wire-check.py.  Progress and the
+invite codes are read from the serial log (test builds mirror the
+console there).
 """
 import os
 import re
@@ -75,133 +79,215 @@ class Screen:
 
 os.makedirs(OUT, exist_ok=True)
 
-# Screen positions on a 1280x800 desktop: the first window opens with its
-# client area at (61, 115).
-DOCK_TERMINAL, DOCK_WORKSPACE = (640, 754), (700, 754)
-EXPLORER_CLOSE = (762, 68)
-NAV = {"overview": (147, 217), "members": (147, 253), "files": (147, 289),
-       "requests": (147, 325), "activity": (147, 361)}
-CODE_FIELD, NAME_FIELD, JOIN = (750, 355), (750, 395), (668, 437)
-INVITE = (750, 151)
-ADD_FILE = (857, 221)
-ROW1_OPEN, ROW1_SAVE, ROW1_REQUEST = (735, 271), (840, 271), (829, 271)
-VIEW_BACK, VIEW_SAVE = (296, 221), (832, 221)
-GRANT1 = (769, 259)
-PARK = (420, 760)  # mouse resting spot, off the windows
+# Screen geometry on the 1280x800 desktop (see wm.c): windows open at
+# content (24 + 36n, 85 + 30n) for the n-th window of a session, moved up
+# to y=75 if they would reach the dock; Code is wide and sits at x=88.
+DOCK = {"explorer": (550, 754), "terminal": (610, 754), "workspace": (670, 754), "code": (730, 754)}
+MENU = {"accounts": (1200, 52), "lock": (1200, 78), "logout": (1200, 104)}
+POWER = (1256, 15)
+GREETER = (410, 166)            # login window content origin
+PARK = (420, 790)
+
+
+def origin(n, h):
+    x, y = 24 + 36 * n, 85 + 30 * n
+    if y + h > 710:
+        y = 75
+    return x, y
+
 
 with Lan(3, iso=os.environ.get("SHUSHA_GUI_ISO", os.path.join(ROOT, "shusha.iso")), pcap=(3,)) as lan:
     time.sleep(40)
     g = {k: Screen(lan, k) for k in (1, 2, 3)}
+    for k in g:
+        g[k].move(-3000, -3000)
 
     def click(k, xy, wait=0.8):
         g[k].go(*xy)
         g[k].click()
         time.sleep(wait)
 
-    def park(k):
+    def shot(k, name):
         g[k].go(*PARK)
         time.sleep(0.4)
-
-    def shot(k, name):
-        park(k)
         g[k].shot(name)
 
-    def wait(k, text, mark, timeout=90):
+    def wait(k, text, mark, timeout=120):
         return lan.wait(k, text, timeout, mark)
 
-    def terminal(k, lines):
-        """Open a Terminal, run some commands, close it again."""
-        click(k, DOCK_TERMINAL, 2.0)
-        for line in lines:
-            g[k].typ(line + "\n")
-            time.sleep(1.0)
+    def key(k, name, n=1, pause=0.15):
+        for _ in range(n):
+            g[k].cmd("sendkey " + name, pause)
 
-    for k in g:  # close the Explorer window that opens at login
-        g[k].move(-3000, -3000)
-        click(k, EXPLORER_CLOSE)
+    def typ(k, text, pause=0.3):
+        g[k].typ(text)
+        time.sleep(pause)
 
-    # 1. vm1 creates the workspace from the app.
-    click(1, DOCK_WORKSPACE, 2.5)
-    shot(1, "01-vm1-workspace-app-before")
+    def first_boot(k, name, pw, shots=False):
+        m = len(lan.log(k))
+        if shots:
+            shot(k, "01-first-boot-setup")
+        typ(k, name + "\t" + pw + "\t" + pw + "\n")
+        wait(k, "authd: created account " + name, m)
+        time.sleep(1.5)
+        if shots:
+            shot(k, "02-recovery-key")
+        typ(k, "\n", 1.5)
+        m = len(lan.log(k))
+        typ(k, pw + "\n")
+        wait(k, "wm: session started for " + name, m)
+        time.sleep(4)
+        click(k, (762, 68), 1.0)  # close the Explorer window of the new session
+
+    def in_app(o, xy):
+        return (o[0] + xy[0], o[1] + xy[1])
+
+    # ---- accounts ---------------------------------------------------------
+    first_boot(1, "admin", "password1", shots=True)
+    first_boot(2, "alice", "alicepass1")
+    first_boot(3, "bob", "bobpass123")
+    click(1, POWER, 0.8)
+    shot(1, "03-user-menu")
+    click(1, MENU["accounts"], 2.5)
+    acc = origin(1, 560)
+    click(1, in_app(acc, (660, 47)), 0.3)
+    typ(1, "password1")
+    click(1, in_app(acc, (364, 279)), 0.3)
+    typ(1, "guest")
+    click(1, in_app(acc, (541, 279)), 0.3)
+    typ(1, "guestpass1")
     m = len(lan.log(1))
-    g[1].typ("shusha-team\n")
-    wait(1, "workspaced: Created workspace", m)
-    time.sleep(3)
-    shot(1, "02-vm1-admin-created")
+    click(1, in_app(acc, (733, 278)), 0.5)
+    wait(1, "authd: created account guest", m)
+    time.sleep(1.5)
+    shot(1, "04-admin-adds-a-local-user")
+    click(1, (acc[0] + 820 - 22, acc[1] - 16), 1.0)  # close Accounts
 
-    # 2. Two invites; codes come from the serial log.
+    # ---- workspace -------------------------------------------------------------
+    click(1, DOCK["workspace"], 2.5)
+    w1 = origin(2, 580)
+    m = len(lan.log(1))
+    typ(1, "shusha-team\n")
+    wait(1, "workspaced: Created workspace", m)
     codes = []
     for _ in range(2):
         m = len(lan.log(1))
-        click(1, INVITE, 1.5)
+        click(1, in_app(w1, (690, 36)), 1.5)
         wait(1, "workspace: invite shu", m)
         codes.append(re.findall(r"invite (shu[a-z2-7]{40,})", lan.log(1)[m:])[-1])
-    shot(1, "03-vm1-invite-code")
-
-    # 3. vm2 and vm3 join through the app.
     for k, code, name in ((2, codes[0], "alice"), (3, codes[1], "bob")):
-        click(k, DOCK_WORKSPACE, 2.5)
-        click(k, CODE_FIELD, 0.3)
-        g[k].typ(code)
-        click(k, NAME_FIELD, 0.3)
-        g[k].typ(name)
+        click(k, DOCK["workspace"], 2.5)
+        wo = origin(1, 580)
+        click(k, in_app(wo, (700, 239)), 0.3)
+        typ(k, code)
+        click(k, in_app(wo, (700, 279)), 0.3)
+        typ(k, name)
         m = len(lan.log(k))
-        click(k, JOIN, 0.5)
+        click(k, in_app(wo, (609, 323)), 0.5)
         wait(k, "workspaced: Joined workspace", m)
-        time.sleep(4)
-    shot(2, "04-vm2-alice-joined")
+        time.sleep(3)
     time.sleep(4)
-    click(1, NAV["members"], 3.0)
-    shot(1, "05-vm1-members-online")
+    shot(2, "05-alice-joined-from-the-app")
 
-    # 4. Alice adds one of her own files.
-    terminal(2, ["write /home/budget.txt Q3 budget 42000 AZN - rank 1 and above", "exit"])
-    click(2, NAV["files"], 1.0)
-    click(2, ADD_FILE, 1.0)
+    # ---- Code: Emmet, then save as an encrypted workspace file ----------------
+    click(2, DOCK["code"], 3.0)
+    key(2, "ctrl-n", 1, 0.6)
+    key(2, "f1", 1, 0.6)
+    typ(2, "language\n")
+    typ(2, "html\n")
+    typ(2, "!")
+    key(2, "tab", 1, 0.8)
+    typ(2, "main.page>h1{Shusha Workspace}+ul>li.item$*3", 1.0)
+    shot(2, "06-code-emmet-suggestion")
+    key(2, "tab", 1, 1.0)
+    key(2, "f1", 1, 0.6)
+    typ(2, "encrypted\n")
+    key(2, "backspace", 12, 0.05)
     m = len(lan.log(2))
-    g[2].typ("budget.txt\n")
-    wait(2, "workspaced: You shared", m)
-    time.sleep(3.5)
-    shot(2, "06-vm2-alice-shared-a-file")
-
-    # 5. The admin opens it; Bob cannot.
-    time.sleep(2)
-    click(1, NAV["files"], 3.0)
-    click(1, ROW1_OPEN, 2.0)
-    shot(1, "07-vm1-admin-opens-lower-rank-file")
-    click(3, NAV["files"], 3.0)
-    shot(3, "08-vm3-bob-sees-a-locked-file")
-    m = len(lan.log(2))
-    click(3, ROW1_REQUEST, 2.0)
-    wait(2, "asks for budget.txt", m)
-
-    # 6. Alice gets the request live in her top bar and grants it.
-    time.sleep(1.5)
-    shot(2, "09-vm2-request-arrives-in-top-bar")
-    click(2, NAV["requests"], 3.0)
-    shot(2, "10-vm2-requests")
-    m = len(lan.log(3))
-    click(2, GRANT1, 2.0)
-    wait(3, "workspaced: You can now open budget.txt", m)
-    time.sleep(1.5)
-    shot(3, "11-vm3-top-bar-access-granted")
-    time.sleep(2)
-    click(3, NAV["files"], 3.0)
-    click(3, ROW1_OPEN, 2.0)
-    click(3, VIEW_SAVE, 2.0)
-    shot(3, "12-vm3-bob-opens-and-saves-a-copy")
-
-    # 7. The admin goes offline; the others carry on.
-    lan.stop(1)
-    m = len(lan.log(2))
-    wait(2, "workspaced: admin went offline", m, 60)
-    time.sleep(10)
-    click(2, NAV["members"], 3.0)
-    shot(2, "13-vm2-admin-offline")
-
-    # 8. Another user on Bob's machine gets nothing.
-    terminal(3, ["su 1000", "id", "ws files", "cat /home/budget.txt"])
-    shot(3, "14-vm3-other-user-terminal")
-    g[3].typ("workspace\n")
+    typ(2, "index.html\n")
+    wait(2, "workspaced: You shared index.html", m)
     time.sleep(3)
-    shot(3, "15-vm3-other-user-app")
+    shot(2, "07-saved-as-encrypted-workspace-file")
+
+    # ---- the admin edits it; Alice sees it arrive -----------------------------------
+    click(1, DOCK["code"], 3.0)
+    key(1, "ctrl-p", 1, 0.8)
+    typ(1, "index\n", 1.5)
+    key(1, "ctrl-end", 1, 0.3)
+    key(1, "up", 3, 0.1)
+    key(1, "end", 1, 0.2)
+    typ(1, "\n<footer>Reviewed by the admin", 0.6)
+    m = len(lan.log(2))
+    key(1, "ctrl-s", 1, 1.0)
+    shot(1, "08-admin-edits-and-saves")
+    wait(2, "workspaced: admin edited index.html", m)
+    time.sleep(1)
+    shot(2, "09-alice-sees-the-edit-arrive")
+
+    # ---- Bob: locked, request, grant, read-only --------------------------------------
+    click(3, DOCK["code"], 3.0)
+    shot(3, "10-bob-sees-a-locked-file")
+    click(3, DOCK["workspace"], 2.0)
+    wb = origin(1, 580)
+    click(3, in_app(wb, (88, 174)), 2.5)
+    m = len(lan.log(2))
+    click(3, in_app(wb, (768, 156)), 2.0)
+    wait(2, "asks for index.html", m)
+    time.sleep(1.5)
+    click(2, DOCK["workspace"], 1.5)
+    wa = origin(1, 580)
+    click(2, in_app(wa, (88, 210)), 2.5)
+    m = len(lan.log(3))
+    click(2, in_app(wa, (708, 144)), 2.0)
+    wait(3, "workspaced: You can now open index.html", m)
+    click(3, DOCK["code"], 1.5)
+    key(3, "ctrl-p", 1, 0.8)
+    typ(3, "index\n", 2.0)
+    shot(3, "11-bob-read-only-after-grant")
+
+    # ---- more languages: CSS with Emmet, Python, the palette ----------------------
+    click(2, DOCK["code"], 1.5)
+    key(2, "ctrl-n", 1, 0.6)
+    key(2, "f1", 1, 0.6)
+    typ(2, "language\n")
+    typ(2, "css\n")
+    typ(2, ".card {\n")
+    for ab in ("df", "jcsb", "p12-20", "bdrs8", "c#fc0", "bgc#1e1e1e"):
+        typ(2, ab, 0.3)
+        key(2, "tab", 1, 0.3)
+        typ(2, "\n", 0.2)
+    shot(2, "12-css-emmet")
+    key(2, "ctrl-n", 1, 0.6)
+    key(2, "f1", 1, 0.6)
+    typ(2, "language\n")
+    typ(2, "python\n")
+    typ(2, "import os\n\ndef greet(name):\n", 0.3)
+    typ(2, "# say hello\nreturn \"Hello, \" + name\n", 0.3)
+    key(2, "backspace", 1, 0.2)
+    typ(2, "\nfor user in os.listdir(\"/home\"):\n", 0.3)
+    typ(2, "print(gr", 1.0)
+    shot(2, "13-python-and-suggestions")
+    key(2, "f1", 1, 0.6)
+    typ(2, "line", 0.8)
+    shot(2, "14-command-palette")
+    key(2, "esc", 1, 0.5)
+
+    # ---- lock screen, then another local user -----------------------------------------
+    click(1, POWER, 0.8)
+    click(1, MENU["lock"], 2.5)
+    shot(1, "15-lock-screen")
+    m = len(lan.log(1))
+    typ(1, "password1\n")
+    wait(1, "wm: unlocked", m)
+    time.sleep(1)
+    click(1, POWER, 0.8)
+    click(1, MENU["logout"], 3.0)
+    shot(1, "16-sign-in-screen-two-users")
+    click(1, (GREETER[0] + 269, GREETER[1] + 144), 0.5)
+    m = len(lan.log(1))
+    typ(1, "guestpass1\n")
+    wait(1, "wm: session started for guest", m)
+    time.sleep(4)
+    click(1, (762, 68), 1.0)
+    click(1, DOCK["workspace"], 3.0)
+    shot(1, "17-guest-sees-no-workspace")

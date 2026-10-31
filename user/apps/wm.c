@@ -129,6 +129,7 @@ static int smode = S_LOGIN;
 static uint32_t s_uid, s_flags;
 static char s_name[24];
 static uint64_t greeter_spawned;
+static int cascade; /* where the next window opens; restarts with each session */
 
 static void session_spawn(const char *path);
 static void session_lock(void);
@@ -768,7 +769,6 @@ static void open_window(const ui_msg_t *req, uint32_t pid, uint32_t uid) {
     int idx = -1, w = req->open.w, h = req->open.h;
     int max_h = screen.h - PANEL_H - TITLE_H - DOCK_H - DOCK_MARGIN - 24;
     uint64_t q;
-    static int cascade;
 
     /* The kernel-stamped sender, not the pid the request claims. */
     ui_mailbox_name(qname, sizeof(qname), pid);
@@ -814,7 +814,7 @@ static void open_window(const ui_msg_t *req, uint32_t pid, uint32_t uid) {
     /* Left of centre, so the wallpaper artwork on the right stays visible. */
     win->x = 24 + (cascade % 6) * 36;
     win->y = PANEL_H + TITLE_H + 22 + (cascade % 6) * 30;
-    cascade++;
+    if (uid != GREETER_UID) cascade++;
     if (win->x < 12) win->x = 12;
     if (win->x + w > screen.w - 12) win->x = screen.w - 12 - w;
     if (win->y + h > screen.h - DOCK_H - DOCK_MARGIN - 12) win->y = PANEL_H + TITLE_H + 12;
@@ -1162,6 +1162,7 @@ static void session_begin(const ui_msg_t *m) {
         s_flags = m->session.flags;
         str_copy(s_name, m->session.name, sizeof(s_name));
         smode = S_SESSION;
+        cascade = 0;
         close_mode_windows(0, 1);
         mode_changed();
         print("wm: session started for ");

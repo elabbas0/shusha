@@ -218,13 +218,18 @@ static void run_line(char *line) {
     } else if (str_eq(c, "poweroff")) (void)sh_power(0);
     else if (str_eq(c, "reboot")) (void)sh_power(1);
     else {
-        /* Any other word runs /apps/<word>.app with the remaining args. */
+        /* Any other word runs /apps/<word>.app (or a path) with the
+         * remaining args. */
         char path[96];
         sh_stat_t st;
-        str_copy(path, "/apps/", sizeof(path));
-        str_cat(path, c, sizeof(path));
-        str_cat(path, ".app", sizeof(path));
-        if (c[0] != '/' && sh_stat(path, &st) == 0) {
+        if (c[0] == '/') {
+            str_copy(path, c, sizeof(path));
+        } else {
+            str_copy(path, "/apps/", sizeof(path));
+            str_cat(path, c, sizeof(path));
+            str_cat(path, ".app", sizeof(path));
+        }
+        if (sh_stat(path, &st) == 0 && st.type != SH_NODE_DIR) {
             char *run_argv[ARGS_MAX + 1];
             run_argv[0] = "run";
             run_argv[1] = path;

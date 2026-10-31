@@ -88,6 +88,8 @@ Each phase has an exit test that must pass in QEMU before the next one starts.
 | 4. Workspace core | v1 done on LAN: genesis, admin-signed hash-chained log, single-use invites, join in order (ranks 0-4 in the 5-VM test), forged/reused invites refused. Stewards and succession to do. |
 | 5. Encrypted files | v1 done on LAN: rank-key chain, per-file keys, owner-signed replicated objects, request/grant, reads with the admin offline, workspace bound to one local user, personal files only enter when that user adds them (`scripts/ws-lan-test.py`, 38 checks). Removal and rekeying to do. |
 | Workspace GUI | Workspace app, live top-bar status (presence, events, sync progress, request badge), dock entry; `scripts/ws-gui-demo.py` drives it on three desktops. |
+| 2. Local multi-user | Done except keyd/encrypted homes: authd (Argon2id + pepper, lockout, recovery keys, admin re-auth), unprivileged login/lock screen, WM sessions, text login, Accounts app, private homes and files by default, privileged syscalls gated (docs/ACCOUNTS.md, `scripts/auth-test.py`, 26 checks + seccheck). |
+| Editor | Code: VS Code-style editor with language recognition, syntax colouring, Emmet, suggestions, palette, find/replace, minimap; edits encrypted workspace files in place with versioning (docs/EDITOR.md, `make editor-test`, 43 checks; workspace editing in `ws-lan-test.py`, 44 checks). |
 | UI | New compositor (`wm`), client library, Explorer and Terminal ported from ICDA. |
 
 ### Gaps found while building
@@ -95,11 +97,12 @@ Each phase has an exit test that must pass in QEMU before the next one starts.
 - **Shared memory and message queues had no access control** (any process could map any window buffer or read any queue). Fixed: SHM handles are unguessable capabilities, only a queue's owner can receive from it, `/proc/<pid>/` queue names are reserved for that pid, and messages carry a kernel-stamped sender pid that the WM and apps check. `ipccheck` (in the image) tries these attacks.
 - **Message queues were never freed** (close is a stub in the frozen ABI). Shusha now reclaims queues whose creating process has exited.
 - **ICDA's USB stack is missing upstream.** `kernel.c` referenced `drivers/usb/xhci.*` and `memory/dma.*`, which were never committed to ICDA; USB init is removed until those sources exist.
-- **Ownership limits (for now):** owners and modes are not yet saved by the on-disk persistence layer (live sessions only); the Linux-personality fd syscalls and program execution are not permission-checked yet; until the login service exists, the desktop runs as root.
+- **Ownership limits (for now):** owners and modes are not yet saved by the on-disk persistence layer (live sessions only); the Linux-personality fd syscalls are not permission-checked yet. (Program start is now checked for read permission, and the desktop runs as the signed-in user.)
 - **Exception and IRQ returns zeroed the user's RCX.** ICDA's `isr_common`/`irq_common` reloaded the data segments through `cx` after restoring the registers, so any page fault taken from user mode (e.g. stack growth) silently cleared RCX. Fixed by choosing the segments before the pops.
 - **Stack growth refused GCC's stack-clash probes.** `orq $0,(%rsp)` faults as a read, and the handler only grew the stack on writes and never above RSP. It now accepts any not-present access in the stack region at or near RSP.
 - **New files were world-readable** (0644 by default) in a shared `/home`. Files and folders created by user processes now start private (0600/0700); boot-time and system-image nodes keep 0644/0755.
 - **A denied `read_at` returned 0**, indistinguishable from an empty file (the first separation test caught `ws put` of a root-only file "sharing" 0 bytes). It now returns -1.
+- **Most machine-wide syscalls were open to every process** (kill any program, format disks, power off, map the framebuffer, read raw keystrokes). They are now root-only (kill: own processes only; input: not while the desktop is active).
 - **Display mode** follows whatever GRUB sets (800x600 in QEMU), by ICDA's design for monitor compatibility.
 
 ## Decisions

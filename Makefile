@@ -38,7 +38,7 @@ KERNEL_OBJ := $(KERNEL_BASE_OBJ) $(B)/k/userprogs.o
 ULIB_OBJ := $(B)/u/lib/crt0.asm.o $(B)/u/lib/lib.o $(B)/u/lib/net.o $(B)/u/crypto/mem.o
 UGUI_OBJ := $(B)/u/lib/ui.o $(B)/u/lib/draw.o
 UPROGS   := init shell wm explorer terminal ipccheck fscheck lanping workspaced ws workspace \
-            authd launch greeter login users accounts code
+            authd launch greeter login users accounts code seccheck
 UCRYPTO  := $(patsubst %,$(B)/u/crypto/%.o,aead chacha20 poly1305 sha2 ed25519 mlkem keccak wrap)
 
 USERPROGS := /sbin/init.app=$(B)/user/init.app \
@@ -58,7 +58,8 @@ USERPROGS := /sbin/init.app=$(B)/user/init.app \
              /sbin/login.app=$(B)/user/login.app \
              /apps/users.app=$(B)/user/users.app \
              /apps/accounts.app=$(B)/user/accounts.app \
-             /apps/code.app=$(B)/user/code.app
+             /apps/code.app=$(B)/user/code.app \
+             /apps/seccheck.app=$(B)/user/seccheck.app
 
 # Test images (lan.iso): same programs, but init starts a root shell on the
 # text console instead of the login, so scripts can drive the machines.
@@ -109,6 +110,7 @@ $(B)/user/terminal.app: $(B)/u/apps/terminal.o $(B)/u/lib/wsclient.o $(UGUI_OBJ)
 $(B)/user/ipccheck.app: $(B)/u/tests/ipccheck.o $(ULIB_OBJ)
 $(B)/user/fscheck.app: $(B)/u/tests/fscheck.o $(ULIB_OBJ)
 $(B)/user/lanping.app: $(B)/u/tests/lanping.o $(ULIB_OBJ)
+$(B)/user/seccheck.app: $(B)/u/tests/seccheck.o $(ULIB_OBJ)
 $(B)/user/workspaced.app: $(B)/u/sbin/workspaced.o $(B)/u/lib/chan.o $(UCRYPTO) $(ULIB_OBJ)
 $(B)/user/ws.app: $(B)/u/apps/ws.o $(B)/u/lib/wsclient.o $(ULIB_OBJ)
 $(B)/user/workspace.app: $(B)/u/apps/workspace.o $(B)/u/lib/wsclient.o $(UGUI_OBJ) $(ULIB_OBJ)
