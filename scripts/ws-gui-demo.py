@@ -3,12 +3,13 @@
 
     make SERIAL_MIRROR=1 shusha.iso && python3 scripts/ws-gui-demo.py [outdir]
 
-Boots three desktops on one virtual LAN, opens a Terminal on each by
-clicking the dock, and drives the scenario in docs/poc/README.md through
-the Terminal's built-in `ws`, saving a screenshot after each step.  vm3's
-network traffic is recorded to build/lan/vm3.pcap for scripts/wire-check.py.
-Invite codes are read from the serial log (test builds mirror the
-Terminal's `ws` output there).
+Boots three desktops on one virtual LAN and drives the Workspace app with
+the mouse and keyboard - create, invite, join, share, locked file, access
+request and grant, admin going offline, another local user refused -
+saving a screenshot after each step (docs/poc/README.md).  vm3's network
+traffic is recorded to build/lan/vm3.pcap for scripts/wire-check.py.
+Invite codes and progress are read from the serial log (test builds
+mirror the console there).
 """
 import os
 import re
@@ -73,70 +74,132 @@ class Screen:
         self.cmd("mouse_button 0", 0.4)
 
 os.makedirs(OUT, exist_ok=True)
-with Lan(3, iso=os.path.join(ROOT, "shusha.iso"), pcap=(3,)) as lan:
-    time.sleep(35)
+
+# Screen positions on a 1280x800 desktop: the first window opens with its
+# client area at (61, 115).
+DOCK_TERMINAL, DOCK_WORKSPACE = (640, 754), (700, 754)
+EXPLORER_CLOSE = (762, 68)
+NAV = {"overview": (147, 217), "members": (147, 253), "files": (147, 289),
+       "requests": (147, 325), "activity": (147, 361)}
+CODE_FIELD, NAME_FIELD, JOIN = (750, 355), (750, 395), (668, 437)
+INVITE = (750, 151)
+ADD_FILE = (857, 221)
+ROW1_OPEN, ROW1_SAVE, ROW1_REQUEST = (735, 271), (840, 271), (829, 271)
+VIEW_BACK, VIEW_SAVE = (296, 221), (832, 221)
+GRANT1 = (769, 259)
+PARK = (420, 760)  # mouse resting spot, off the windows
+
+with Lan(3, iso=os.environ.get("SHUSHA_GUI_ISO", os.path.join(ROOT, "shusha.iso")), pcap=(3,)) as lan:
+    time.sleep(40)
     g = {k: Screen(lan, k) for k in (1, 2, 3)}
-    for k in g:  # close Explorer, open Terminal from the dock
-        g[k].move(-3000, -3000); g[k].go(762, 68); g[k].click(); time.sleep(0.8)
-        g[k].go(670, 754); g[k].click(); time.sleep(2)
-        g[k].go(420, 640)
-    def run(k, c, until=None, wait=1.2):
-        mark = len(lan.log(k))
-        g[k].typ(c + "\n")
-        if until: lan.wait(k, until, 90, mark)
+
+    def click(k, xy, wait=0.8):
+        g[k].go(*xy)
+        g[k].click()
         time.sleep(wait)
-        return lan.log(k)[mark:]
-    def shot(k, name): g[k].shot(name)
 
-    run(1, "ws create shusha-team", "admin)")
-    run(1, "ws invite", "shu")
-    c2 = re.findall(r"shu[a-z2-7]{40,}", lan.log(1))[-1]
-    run(1, "ws invite", "shu")
-    c3 = re.findall(r"shu[a-z2-7]{40,}", lan.log(1))[-1]
-    assert c2 != c3
-    shot(1, "01-vm1-admin-creates-and-invites")
+    def park(k):
+        g[k].go(*PARK)
+        time.sleep(0.4)
 
-    run(2, "ws join %s alice" % c2, "rank")
-    run(3, "ws join %s bob" % c3, "rank")
+    def shot(k, name):
+        park(k)
+        g[k].shot(name)
+
+    def wait(k, text, mark, timeout=90):
+        return lan.wait(k, text, timeout, mark)
+
+    def terminal(k, lines):
+        """Open a Terminal, run some commands, close it again."""
+        click(k, DOCK_TERMINAL, 2.0)
+        for line in lines:
+            g[k].typ(line + "\n")
+            time.sleep(1.0)
+
+    for k in g:  # close the Explorer window that opens at login
+        g[k].move(-3000, -3000)
+        click(k, EXPLORER_CLOSE)
+
+    # 1. vm1 creates the workspace from the app.
+    click(1, DOCK_WORKSPACE, 2.5)
+    shot(1, "01-vm1-workspace-app-before")
+    m = len(lan.log(1))
+    g[1].typ("shusha-team\n")
+    wait(1, "workspaced: Created workspace", m)
+    time.sleep(3)
+    shot(1, "02-vm1-admin-created")
+
+    # 2. Two invites; codes come from the serial log.
+    codes = []
+    for _ in range(2):
+        m = len(lan.log(1))
+        click(1, INVITE, 1.5)
+        wait(1, "workspace: invite shu", m)
+        codes.append(re.findall(r"invite (shu[a-z2-7]{40,})", lan.log(1)[m:])[-1])
+    shot(1, "03-vm1-invite-code")
+
+    # 3. vm2 and vm3 join through the app.
+    for k, code, name in ((2, codes[0], "alice"), (3, codes[1], "bob")):
+        click(k, DOCK_WORKSPACE, 2.5)
+        click(k, CODE_FIELD, 0.3)
+        g[k].typ(code)
+        click(k, NAME_FIELD, 0.3)
+        g[k].typ(name)
+        m = len(lan.log(k))
+        click(k, JOIN, 0.5)
+        wait(k, "workspaced: Joined workspace", m)
+        time.sleep(4)
+    shot(2, "04-vm2-alice-joined")
     time.sleep(4)
-    run(2, "ws members", "you")
-    shot(2, "02-vm2-alice-joins-rank1")
-    run(3, "ws members", "you")
-    shot(3, "03-vm3-bob-joins-rank2")
+    click(1, NAV["members"], 3.0)
+    shot(1, "05-vm1-members-online")
 
-    run(2, "clear")
-    run(2, "write /home/budget.txt Q3 budget 42000 AZN - rank 1 and above")
-    run(2, "ws put /home/budget.txt", "replicated")
-    time.sleep(3)
-    shot(2, "04-vm2-alice-shares-budget")
+    # 4. Alice adds one of her own files.
+    terminal(2, ["write /home/budget.txt Q3 budget 42000 AZN - rank 1 and above", "exit"])
+    click(2, NAV["files"], 1.0)
+    click(2, ADD_FILE, 1.0)
+    m = len(lan.log(2))
+    g[2].typ("budget.txt\n")
+    wait(2, "workspaced: You shared", m)
+    time.sleep(3.5)
+    shot(2, "06-vm2-alice-shared-a-file")
 
-    run(1, "clear")
-    run(1, "ws members", "you")
-    run(1, "ws files", "rank")
-    run(1, "ws cat budget.txt", "AZN")
-    shot(1, "05-vm1-admin-reads-lower-rank-file")
+    # 5. The admin opens it; Bob cannot.
+    time.sleep(2)
+    click(1, NAV["files"], 3.0)
+    click(1, ROW1_OPEN, 2.0)
+    shot(1, "07-vm1-admin-opens-lower-rank-file")
+    click(3, NAV["files"], 3.0)
+    shot(3, "08-vm3-bob-sees-a-locked-file")
+    m = len(lan.log(2))
+    click(3, ROW1_REQUEST, 2.0)
+    wait(2, "asks for budget.txt", m)
 
-    run(3, "clear")
-    run(3, "ws files", "rank")
-    run(3, "ws cat budget.txt", "no ")
-    run(3, "ws request rank1", "request")
-    shot(3, "06-vm3-bob-locked-out-and-requests")
+    # 6. Alice gets the request live in her top bar and grants it.
+    time.sleep(1.5)
+    shot(2, "09-vm2-request-arrives-in-top-bar")
+    click(2, NAV["requests"], 3.0)
+    shot(2, "10-vm2-requests")
+    m = len(lan.log(3))
+    click(2, GRANT1, 2.0)
+    wait(3, "workspaced: You can now open budget.txt", m)
+    time.sleep(1.5)
+    shot(3, "11-vm3-top-bar-access-granted")
+    time.sleep(2)
+    click(3, NAV["files"], 3.0)
+    click(3, ROW1_OPEN, 2.0)
+    click(3, VIEW_SAVE, 2.0)
+    shot(3, "12-vm3-bob-opens-and-saves-a-copy")
 
-    run(2, "ws requests", "asks")
-    run(2, "ws grant budget.txt 2", "replicated")
-    time.sleep(3)
-    shot(2, "07-vm2-alice-grants-bob")
-
-    run(3, "ws cat budget.txt", "AZN")
-    shot(3, "08-vm3-bob-reads-after-grant")
-
+    # 7. The admin goes offline; the others carry on.
     lan.stop(1)
-    time.sleep(1)
-    run(3, "clear")
-    run(3, "write /home/notes.txt bob draft - shared while the admin is offline")
-    run(3, "ws put /home/notes.txt", "replicated", wait=2)
-    shot(3, "09-vm3-admin-offline-bob-shares")
-    run(2, "clear")
-    run(2, "ws cat notes.txt", "offline")
-    run(2, "ws status", "rank")
-    shot(2, "10-vm2-admin-offline-alice-reads")
+    m = len(lan.log(2))
+    wait(2, "workspaced: admin went offline", m, 60)
+    time.sleep(10)
+    click(2, NAV["members"], 3.0)
+    shot(2, "13-vm2-admin-offline")
+
+    # 8. Another user on Bob's machine gets nothing.
+    terminal(3, ["su 1000", "ws files", "cat /home/budget.txt", "workspace"])
+    time.sleep(3)
+    shot(3, "14-vm3-other-user-refused")

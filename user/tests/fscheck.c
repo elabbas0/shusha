@@ -40,6 +40,7 @@ int main(void) {
 
     expect(sh_write_file("/home/u1000.txt", "mine\n", 5) > 0, "can create its own file in /home");
     expect(sh_stat("/home/u1000.txt", &st) == 0 && st.uid == 1000, "new file is owned by uid 1000");
+    expect(st.mode == 0600, "and private by default (0600)");
     expect(sh_chmod("/home/u1000.txt", 0600) == 0, "owner can chmod its own file");
     expect(sh_read("/home/u1000.txt", buf, sizeof(buf)) == 5, "owner can still read it");
     expect(sh_read("/etc/motd.txt", buf, sizeof(buf)) > 0, "world-readable files stay readable");

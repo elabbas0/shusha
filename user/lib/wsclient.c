@@ -110,6 +110,10 @@ long ws_run(const char *cmdline, char *out, uint64_t cap) {
             str_copy(out, data, cap);
             return -1;
         }
+        /* Workspace content stays private once saved: 0600 before it
+         * holds anything. */
+        (void)sh_create(argv[2]);
+        (void)sh_chmod(argv[2], 0600);
         if (sh_write_file(argv[2], data, (uint64_t)n) < 0) {
             mem_wipe(data, sizeof(data));
             return fail(out, cap, "ws: you cannot write there\n");

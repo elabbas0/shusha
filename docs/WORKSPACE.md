@@ -277,8 +277,50 @@ Ethernet segment:
 | Admin powered off | rank 1 still reads its replica; a new rank-4 file reaches and is readable by ranks 1-3 |
 
 Commands: `ws status | create <name> | invite | join <code> [name] |
-members | put <file> | files | cat <file> | request <file> | requests |
-grant <file> <rank> | sync`.
+members | put <file> | get <file> <dest> | files | cat <file> |
+request <file> | requests | grant <file> <rank> | deny <file> <rank> |
+sync`.
+
+### The workspace is separate from personal files
+
+- **One owner per machine.** The workspace belongs to the local user who
+  created or joined it. The kernel stamps each request with the sender's
+  uid, and workspaced refuses everyone else on that machine. They cannot
+  see its members, files or status.
+- **Nothing enters it unless the user adds it.** `put` (and "Add file" in
+  the app) is done by the client, running as the user. It reads the file
+  with the user's own permissions and hands over only the contents. The
+  root daemon never opens a personal path, so it cannot be used to share
+  someone else's file.
+- **Copies out are the user's.** `get` / "Save copy" writes with the
+  user's own permissions, and the copy is private (0600) from the start.
+- **Personal files are private by default.** Files and folders a user
+  creates start at 0600 / 0700. The system image stays world-readable.
+- **Private plumbing.**
+  - Request files must be the requester's own and not writable by
+    others.
+  - Answers (which can hold decrypted content) are chowned to the
+    requester and set 0600 before they are written.
+  - The top-bar status file is 0600, owned by the workspace's user.
+
+### Live status
+
+- **Presence.** Members ping each other every 2 s over the secure
+  channels. Anyone silent for 7 s is offline, and their channel is
+  dropped. When a member comes back, the two sides sync automatically.
+- **Events.** workspaced keeps the last 12 events (joins, shares,
+  requests, grants, presence) and writes a summary to `/var/ws/status`.
+- **Top bar.** The WM shows a live pill with:
+  - the workspace, your rank, and who is online;
+  - the latest event for 6 s;
+  - what it is syncing, while it syncs;
+  - a red badge for requests waiting on you.
+
+  Clicking it opens the Workspace app.
+- **The Workspace app** (`user/apps/workspace.c`) has these views:
+  create/join, overview, members, files (open, save a copy, request
+  access, add a file), requests (grant/deny) and activity. It refreshes
+  every 2.5 s.
 
 Not yet in v1: stewards and succession, re-ranking, removal and rekeying,
 edit grants (any reader holding FK could re-encrypt; objects are only

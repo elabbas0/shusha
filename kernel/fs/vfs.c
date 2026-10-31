@@ -107,9 +107,15 @@ static vfs_node_t *new_node(const char *name, uint8_t type, uint8_t readonly) {
     node->modified = node->created;
     node->type = type;
     node->readonly = readonly;
-    /* New nodes belong to the process creating them (kernel: root). */
+    /* New nodes belong to the process creating them (kernel: root).
+     * What a user creates is private until they open it up; the system
+     * image and boot-time nodes stay world-readable. */
     node->uid = vfs_current_uid();
-    node->mode = type == VFS_NODE_DIR ? 0755 : 0644;
+    if (sched_current_process() && sched_current_process()->kind == PROCESS_USER) {
+        node->mode = type == VFS_NODE_DIR ? 0700 : 0600;
+    } else {
+        node->mode = type == VFS_NODE_DIR ? 0755 : 0644;
+    }
     if (readonly) node->mode &= (uint16_t)~0222;
     return node;
 }

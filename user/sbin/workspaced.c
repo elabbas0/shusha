@@ -1701,6 +1701,7 @@ int main(void) {
     (void)sh_mkdir(WS_DIR "/files");
     /* /var/ws/io is the drop box for `ws` requests from any user; the
      * identity, state and replicas stay root-only. */
+    (void)sh_chmod("/var", 0755); /* user-created nodes default to private */
     (void)sh_chmod(WS_DIR, 0711);
     (void)sh_chmod(WS_IO_DIR, 0777);
     (void)sh_chmod(WS_DIR "/files", 0700);

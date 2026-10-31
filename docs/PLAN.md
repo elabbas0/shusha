@@ -86,7 +86,8 @@ Each phase has an exit test that must pass in QEMU before the next one starts.
 | 1. Kernel security | Partly done. CSPRNG + `/dev/random`; TLS/session-token randomness fixed; crypto library complete for the design: ChaCha20-Poly1305, XChaCha20-Poly1305, SHA-2, SHA-3/SHAKE, BLAKE2b, HMAC, HKDF, Argon2id, Ed25519, X25519, ML-KEM-768 and the hybrid key wrap, 245 test-vector checks. Files and directories have owners and rwx modes enforced by the file syscalls; `/dev/setuid`, `/dev/chmod`, `/dev/chown`; `fscheck` (21 checks) in the image. Still to do: listening sockets. |
 | 3. Secure transport | Done for LAN. Kernel UDP for userspace (`/dev/udp`, `/dev/netinfo`), ARP replies, link-local addressing; SIGMA-I channel with X25519 + ML-KEM-768 and Ed25519 identities, AEAD frames, replay window. Multi-VM harness `scripts/lan.py`. Still to do: reliability layer, rekeying, beacons. |
 | 4. Workspace core | v1 done on LAN: genesis, admin-signed hash-chained log, single-use invites, join in order (ranks 0-4 in the 5-VM test), forged/reused invites refused. Stewards and succession to do. |
-| 5. Encrypted files | v1 done on LAN: rank-key chain, per-file keys, owner-signed replicated objects, request/grant, reads with the admin offline (`scripts/ws-lan-test.py`, 32 checks). Removal and rekeying to do. |
+| 5. Encrypted files | v1 done on LAN: rank-key chain, per-file keys, owner-signed replicated objects, request/grant, reads with the admin offline, workspace bound to one local user, personal files only enter when that user adds them (`scripts/ws-lan-test.py`, 38 checks). Removal and rekeying to do. |
+| Workspace GUI | Workspace app, live top-bar status (presence, events, sync progress, request badge), dock entry; `scripts/ws-gui-demo.py` drives it on three desktops. |
 | UI | New compositor (`wm`), client library, Explorer and Terminal ported from ICDA. |
 
 ### Gaps found while building
@@ -97,6 +98,8 @@ Each phase has an exit test that must pass in QEMU before the next one starts.
 - **Ownership limits (for now):** owners and modes are not yet saved by the on-disk persistence layer (live sessions only); the Linux-personality fd syscalls and program execution are not permission-checked yet; until the login service exists, the desktop runs as root.
 - **Exception and IRQ returns zeroed the user's RCX.** ICDA's `isr_common`/`irq_common` reloaded the data segments through `cx` after restoring the registers, so any page fault taken from user mode (e.g. stack growth) silently cleared RCX. Fixed by choosing the segments before the pops.
 - **Stack growth refused GCC's stack-clash probes.** `orq $0,(%rsp)` faults as a read, and the handler only grew the stack on writes and never above RSP. It now accepts any not-present access in the stack region at or near RSP.
+- **New files were world-readable** (0644 by default) in a shared `/home`. Files and folders created by user processes now start private (0600/0700); boot-time and system-image nodes keep 0644/0755.
+- **A denied `read_at` returned 0**, indistinguishable from an empty file (the first separation test caught `ws put` of a root-only file "sharing" 0 bytes). It now returns -1.
 - **Display mode** follows whatever GRUB sets (800x600 in QEMU), by ICDA's design for monitor compatibility.
 
 ## Decisions
