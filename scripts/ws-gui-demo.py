@@ -200,6 +200,8 @@ with Lan(3, iso=os.environ.get("SHUSHA_GUI_ISO", os.path.join(ROOT, "shusha.iso"
     shot(2, "13-vm2-admin-offline")
 
     # 8. Another user on Bob's machine gets nothing.
-    terminal(3, ["su 1000", "ws files", "cat /home/budget.txt", "workspace"])
+    terminal(3, ["su 1000", "id", "ws files", "cat /home/budget.txt"])
+    shot(3, "14-vm3-other-user-terminal")
+    g[3].typ("workspace\n")
     time.sleep(3)
-    shot(3, "14-vm3-other-user-refused")
+    shot(3, "15-vm3-other-user-app")

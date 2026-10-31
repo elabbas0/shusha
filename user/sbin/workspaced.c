@@ -1471,7 +1471,7 @@ static void cmd_requests(void) {
 
 static void cmd_grant(const char *name, int rank) {
     uint8_t fk[32];
-    char purpose[48];
+    char purpose[48], fname[65];
     int have;
     uint64_t p, body_len;
     member_t *m = member_by_rank(rank);
@@ -1488,6 +1488,7 @@ static void cmd_grant(const char *name, int rank) {
         say("unknown member (try ws sync)\n");
         return;
     }
+    if (decrypt_name(fname, obj, fk) != 0) str_copy(fname, name, sizeof(fname));
     body_len = object_len(obj) - 64;
     p = body_len;
     file_purpose(purpose, obj + OFF_ID);
@@ -1504,10 +1505,12 @@ static void cmd_grant(const char *name, int rank) {
     save_state();
     mem_wipe(fk, 32);
     say("granted ");
-    say(name);
-    say(" to rank ");
+    say(fname);
+    say(" to ");
+    say(m->name);
+    say(" (rank ");
     say_u((uint64_t)rank);
-    say("\n");
+    say(")\n");
     files_dirty = 1;
     event("You granted ", m->name, " access");
     replicate(obj, p + 64);
