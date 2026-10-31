@@ -416,7 +416,7 @@ static uint64_t sys_vfs_read_at(const char *path, uint64_t offset, char *buf, ui
     {
         vfs_node_t *node = vfs_resolve(cwd_of(proc), path);
         if (node && !may(proc, node, VFS_R)) {
-            return 0;
+            return (uint64_t)-1; /* denied is an error, not an empty file */
         }
     }
 
@@ -1995,9 +1995,9 @@ static uint64_t syscall_dispatch_native(struct registers *regs) {
             if (!user_range_prepare_cur_w(out, 64)) {
                 return (uint64_t)-U_EFAULT;
             }
-            /* rdx: bit0 block, bit1 return sender pid (post-freeze
-             * flag, see docs/ABI-v1.md); upper bits must be 0. */
-            return (uint64_t)msgq_recv(regs->rdi, out, (int)(regs->rdx & 3));
+            /* rdx: bit0 block, bit1 return sender pid, bit2 return
+             * pid | uid << 32 (post-freeze flags, see docs/ABI-v1.md). */
+            return (uint64_t)msgq_recv(regs->rdi, out, (int)(regs->rdx & 7));
         }
         case SYS_MSG_POLL:
             /* rsi bit0: return the queue owner's pid (post-freeze). */

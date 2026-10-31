@@ -8,8 +8,9 @@
  *  - only the owner (creating process) may receive from it or poll it;
  *  - names under "/proc/<pid>/" can only be created by process <pid>,
  *    so a process's private mailbox cannot be squatted in advance;
- *  - every message records its sender's pid, which a receiver can ask
- *    for (MSGQ_RECV_SENDER) to authenticate the peer.
+ *  - every message records its sender's pid and uid, which a receiver
+ *    can ask for (MSGQ_RECV_SENDER, MSGQ_RECV_UID) to authenticate the
+ *    peer and decide what it may do.
  */
 typedef struct {
     int      valid;
@@ -17,6 +18,7 @@ typedef struct {
     char     name[MSGQ_NAME_MAX];
     uint8_t  buffer[MSGQ_MAX_MSGS][MSGQ_MSG_SIZE];
     uint64_t sender[MSGQ_MAX_MSGS];
+    uint32_t sender_uid[MSGQ_MAX_MSGS];
     uint32_t head;
     uint32_t tail;
     uint32_t count;
@@ -49,6 +51,11 @@ static void msgq_copy_name(char *dst, const char *src) {
 static uint64_t current_pid(void) {
     process_t *p = sched_current_process();
     return p ? p->pid : 0;
+}
+
+static uint32_t current_uid(void) {
+    process_t *p = sched_current_process();
+    return p ? p->ex_uid : 0;
 }
 
 /* For "/proc/<pid>/...", the pid that may create it; 0 for other names. */
@@ -107,6 +114,7 @@ int msgq_send(uint64_t handle, const void *msg) {
     const uint8_t *src = (const uint8_t *)msg;
     for (int i = 0; i < MSGQ_MSG_SIZE; i++) slot[i] = src[i];
     q->sender[q->head] = current_pid();
+    q->sender_uid[q->head] = current_uid();
 
     q->head = (q->head + 1) % MSGQ_MAX_MSGS;
     q->count++;
@@ -115,6 +123,7 @@ int msgq_send(uint64_t handle, const void *msg) {
 
 int64_t msgq_recv(uint64_t handle, void *out, int flags) {
     uint64_t sender;
+    uint32_t sender_uid;
     if (!handle || handle > MSGQ_MAX_QUEUES || !out) return -1;
     msgq_t *q = &msgq_table[handle - 1];
     if (!q->valid || !is_owner(q)) return -1;
@@ -139,9 +148,11 @@ int64_t msgq_recv(uint64_t handle, void *out, int flags) {
     uint8_t *dst  = (uint8_t *)out;
     for (int i = 0; i < MSGQ_MSG_SIZE; i++) dst[i] = slot[i];
     sender = q->sender[q->tail];
+    sender_uid = q->sender_uid[q->tail];
 
     q->tail = (q->tail + 1) % MSGQ_MAX_MSGS;
     q->count--;
+    if (flags & MSGQ_RECV_UID) return (int64_t)(sender | (uint64_t)sender_uid << 32);
     return (flags & MSGQ_RECV_SENDER) ? (int64_t)sender : 0;
 }
 

@@ -84,7 +84,7 @@ int  text_width(const char *text);
 void draw_text_clip(surface_t *s, int x, int y, const char *text, uint32_t fg, int max_px);
 void draw_char(surface_t *s, int x, int y, char ch, uint32_t fg);
 
-enum { ICON_FOLDER, ICON_FILE, ICON_APP, ICON_TERMINAL, ICON_POWER };
+enum { ICON_FOLDER, ICON_FILE, ICON_APP, ICON_TERMINAL, ICON_POWER, ICON_WORKSPACE, ICON_LOCK };
 #define ICON_SIZE 48
 void draw_icon(surface_t *s, int x, int y, int icon);
 void draw_cursor(surface_t *s, int x, int y);

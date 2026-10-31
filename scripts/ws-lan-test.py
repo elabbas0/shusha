@@ -9,6 +9,10 @@ invite are refused, every machine sees the same verified member list, a
 rank-2 file is readable by ranks 0-2 and locked for ranks 3-4, an access
 request is granted, and with the admin powered off the members still
 read replicas and share new files among themselves.
+
+Personal files stay personal: vm5's workspace belongs to uid 1000, who
+cannot share a root-only file, and another local user (uid 1000 on vm4,
+whose workspace is root's) is refused outright.
 """
 import re
 import sys
@@ -18,7 +22,7 @@ sys.path.insert(0, __import__("os").path.dirname(__file__))
 from lan import Lan  # noqa: E402
 
 N = 5
-PROMPT = "\nroot@shusha"
+PROMPT = "shusha:"  # "root@shusha:" or, after su, "shusha:"
 failures = []
 
 
@@ -31,7 +35,7 @@ def check(cond, what):
 def ws(lan, k, args, timeout=90):
     out = lan.run(k, "ws " + args, PROMPT, timeout)
     body = out.split("\n", 1)[1] if "\n" in out else ""
-    body = body[: body.rfind(PROMPT)] if PROMPT in body else body
+    body = body[: body.rfind("\n")] if PROMPT in body else body
     print("  vm%d$ ws %s\n%s" % (k, args, "".join("        " + l + "\n" for l in body.strip("\n").splitlines())), end="")
     return body
 
@@ -42,6 +46,10 @@ def main():
         for k in range(1, N + 1):
             lan.wait(k, "workspaced: ready", 60)
         print("%d machines up\n" % N)
+        # vm5 is used by an ordinary user, uid 1000; a root-only file sits next to it.
+        lan.run(5, "write /home/rootonly.txt root-secret", PROMPT, 20)
+        lan.run(5, "chmod 600 /home/rootonly.txt", PROMPT, 20)
+        lan.run(5, "su 1000", PROMPT, 20)
 
         print("[create + invite + join]")
         check("rank 0 (admin)" in ws(lan, 1, "create shusha-team"), "vm1 creates the workspace as admin")
@@ -98,6 +106,18 @@ def main():
         time.sleep(4)
         for k in (2, 3, 4):
             check("rank-four-notes" in ws(lan, k, "cat notes.txt"), "rank %d reads it with the admin offline" % (k - 1))
+
+        print("\n[personal files stay personal]")
+        out = ws(lan, 5, "put /home/rootonly.txt")
+        check("cannot read" in out, "uid 1000 cannot share a root-only file")
+        check("root-secret" not in ws(lan, 2, "files"), "nothing from it reached the workspace")
+        out = ws(lan, 2, "get plan.txt /home/plan-copy.txt")
+        check("saved a copy" in out, "a member saves a shared file into their own files")
+        check("rank-two-plan" in lan.run(2, "cat /home/plan-copy.txt", PROMPT, 20), "the copy is readable locally")
+        lan.run(4, "su 1000", PROMPT, 20)
+        out = ws(lan, 4, "files")
+        check("belongs to another user" in out and "plan.txt" not in out, "another local user is refused")
+        check("belongs to another user" in ws(lan, 4, "cat plan.txt"), "... and cannot read workspace files")
 
     print("\n%s: %d failure(s)" % ("PASS" if not failures else "FAIL", len(failures)))
     return 1 if failures else 0

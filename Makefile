@@ -36,7 +36,7 @@ KERNEL_OBJ := $(KERNEL_C:%.c=$(B)/k/%.o) $(KERNEL_ASM:%.asm=$(B)/k/%.asm.o) $(B)
 
 ULIB_OBJ := $(B)/u/lib/crt0.asm.o $(B)/u/lib/lib.o $(B)/u/lib/net.o $(B)/u/crypto/mem.o
 UGUI_OBJ := $(B)/u/lib/ui.o $(B)/u/lib/draw.o
-UPROGS   := init shell wm explorer terminal ipccheck fscheck lanping workspaced ws
+UPROGS   := init shell wm explorer terminal ipccheck fscheck lanping workspaced ws workspace
 UCRYPTO  := $(patsubst %,$(B)/u/crypto/%.o,aead chacha20 poly1305 sha2 ed25519 mlkem keccak wrap)
 
 USERPROGS := /sbin/init.app=$(B)/user/init.app \
@@ -48,7 +48,8 @@ USERPROGS := /sbin/init.app=$(B)/user/init.app \
              /apps/fscheck.app=$(B)/user/fscheck.app \
              /apps/lanping.app=$(B)/user/lanping.app \
              /sbin/workspaced.app=$(B)/user/workspaced.app \
-             /apps/ws.app=$(B)/user/ws.app
+             /apps/ws.app=$(B)/user/ws.app \
+             /apps/workspace.app=$(B)/user/workspace.app
 
 UAPPS := $(UPROGS:%=$(B)/user/%.app)
 
@@ -97,6 +98,7 @@ $(B)/user/fscheck.app: $(B)/u/tests/fscheck.o $(ULIB_OBJ)
 $(B)/user/lanping.app: $(B)/u/tests/lanping.o $(ULIB_OBJ)
 $(B)/user/workspaced.app: $(B)/u/sbin/workspaced.o $(B)/u/lib/chan.o $(UCRYPTO) $(ULIB_OBJ)
 $(B)/user/ws.app: $(B)/u/apps/ws.o $(B)/u/lib/wsclient.o $(ULIB_OBJ)
+$(B)/user/workspace.app: $(B)/u/apps/workspace.o $(B)/u/lib/wsclient.o $(UGUI_OBJ) $(ULIB_OBJ)
 
 $(UAPPS): user/lib/user.ld
 	@mkdir -p $(dir $@)

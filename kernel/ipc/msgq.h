@@ -15,10 +15,12 @@ uint64_t msgq_open(const char *name);
 int msgq_send(uint64_t handle, const void *msg);
 
 /* Owner only.  flags: MSGQ_RECV_BLOCK waits for a message;
- * MSGQ_RECV_SENDER returns the sender's pid instead of 0.  -1 when
- * empty, not the owner, or a bad handle. */
+ * MSGQ_RECV_SENDER returns the sender's pid instead of 0; MSGQ_RECV_UID
+ * returns pid | (uid << 32), both stamped at send time.  -1 when empty,
+ * not the owner, or a bad handle. */
 #define MSGQ_RECV_BLOCK  1
 #define MSGQ_RECV_SENDER 2
+#define MSGQ_RECV_UID    4
 int64_t msgq_recv(uint64_t handle, void *out, int flags);
 
 /* 1 if a message is waiting, 0 if empty, -1 bad handle or not the owner. */

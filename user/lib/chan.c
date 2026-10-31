@@ -20,6 +20,8 @@ typedef struct {
     uint8_t k_send[32], k_recv[32];
     uint64_t send_ctr, recv_max, recv_bits;
     uint8_t peer_pub[32];
+    uint8_t init_pub[32]; /* identity of whichever side started the handshake */
+    uint64_t hs1_sent;    /* tick of the last HS1 (re)transmission */
     uint8_t hs1[1 + 8 + 32 + SC_MLKEM_EK]; /* kept for retransmission */
 } chan_t;
 
@@ -189,6 +191,31 @@ static void on_hs1(const uint8_t *p, long n, const net_addr_t *from) {
     mem_wipe(k_hs_r, sizeof(k_hs_r));
 }
 
+static int cmp32(const uint8_t *a, const uint8_t *b) {
+    for (int i = 0; i < 32; i++) {
+        if (a[i] != b[i]) return a[i] < b[i] ? -1 : 1;
+    }
+    return 0;
+}
+
+/* One open channel per peer.  When two exist - a reconnect, or both
+ * sides dialling at once - both ends must drop the same one: the newer
+ * wins if the same side started both, otherwise the one started by the
+ * smaller identity key. */
+static void dedupe(int n) {
+    for (int i = 0; i < CHAN_MAX; i++) {
+        int c;
+        if (i == n || chans[i].state != ST_OPEN || !mem_eq_ct(chans[i].peer_pub, chans[n].peer_pub, 32)) continue;
+        c = cmp32(chans[i].init_pub, chans[n].init_pub);
+        if (c == 0 || c > 0) {
+            chan_close(i);
+        } else {
+            chan_close(n);
+            return;
+        }
+    }
+}
+
 static void finish_keys(chan_t *c, int initiator) {
     uint8_t a[32], b[32];
     expand(a, c->prk, "data i2r", c->th);
@@ -199,11 +226,13 @@ static void finish_keys(chan_t *c, int initiator) {
     c->recv_max = 0;
     c->recv_bits = 0;
     c->state = ST_OPEN;
+    mem_copy(c->init_pub, initiator ? my_pub : c->peer_pub, 32);
     mem_wipe(c->prk, 32);
     mem_wipe(c->e_priv, 32);
     mem_wipe(c->kem_dk, sizeof(c->kem_dk));
     mem_wipe(a, 32);
     mem_wipe(b, 32);
+    dedupe((int)(c - chans));
 }
 
 static void on_hs2(const uint8_t *p, long n, const net_addr_t *from) {
@@ -340,16 +369,25 @@ int chan_poll(chan_msg_t *out) {
     return 0;
 }
 
-int chan_connect(const uint8_t ip[4], uint16_t port, uint64_t timeout_ticks) {
-    uint64_t end = sh_ticks() + timeout_ticks, resend = 0;
-    uint8_t seed[64];
-    chan_t *c;
-    int i;
+int chan_find(const uint8_t peer_pub[32]) {
+    for (int i = 0; i < CHAN_MAX; i++) {
+        if (chans[i].state == ST_OPEN && mem_eq_ct(chans[i].peer_pub, peer_pub, 32)) return i;
+    }
+    return -1;
+}
 
-    for (i = 0; i < CHAN_MAX; i++) {
+static int find_open(const uint8_t ip[4], uint16_t port) {
+    for (int i = 0; i < CHAN_MAX; i++) {
         if (chans[i].state == ST_OPEN && mem_eq_ct(chans[i].peer.ip, ip, 4) && chans[i].peer.port == port) return i;
     }
-    i = alloc_chan();
+    return -1;
+}
+
+/* Allocate a channel and build (but do not send) its HS1. */
+static int start_hs1(const uint8_t ip[4], uint16_t port) {
+    uint8_t seed[64];
+    chan_t *c;
+    int i = alloc_chan();
     c = &chans[i];
     c->state = ST_SENT_HS1;
     mem_copy(c->peer.ip, ip, 4);
@@ -364,7 +402,30 @@ int chan_connect(const uint8_t ip[4], uint16_t port, uint64_t timeout_ticks) {
     mem_copy(c->hs1 + 1, c->sid_local, 8);
     mem_copy(c->hs1 + 9, c->e_pub, 32);
     mem_copy(c->hs1 + 41, c->kem_ek, SC_MLKEM_EK);
+    return i;
+}
 
+int chan_open(const uint8_t ip[4], uint16_t port) {
+    int i = find_open(ip, port);
+    if (i >= 0) return i;
+    for (i = 0; i < CHAN_MAX; i++) {
+        if (chans[i].state == ST_SENT_HS1 && mem_eq_ct(chans[i].peer.ip, ip, 4) && chans[i].peer.port == port) break;
+    }
+    if (i == CHAN_MAX) i = start_hs1(ip, port);
+    else if (sh_ticks() - chans[i].hs1_sent < 50) return -1;
+    chans[i].hs1_sent = sh_ticks();
+    (void)net_send(my_port, ip, port, chans[i].hs1, sizeof(chans[i].hs1));
+    return -1;
+}
+
+int chan_connect(const uint8_t ip[4], uint16_t port, uint64_t timeout_ticks) {
+    uint64_t end = sh_ticks() + timeout_ticks, resend = 0;
+    chan_t *c;
+    int i = find_open(ip, port);
+
+    if (i >= 0) return i;
+    i = start_hs1(ip, port);
+    c = &chans[i];
     while (sh_ticks() < end) {
         chan_msg_t m;
         int got;
@@ -376,7 +437,7 @@ int chan_connect(const uint8_t ip[4], uint16_t port, uint64_t timeout_ticks) {
             if (got && backlog_n < BACKLOG) backlog[backlog_n++] = m;
         }
         if (c->state == ST_OPEN) return i;
-        if (c->state == ST_FREE) return -1; /* peer failed authentication */
+        if (c->state == ST_FREE) return find_open(ip, port); /* failed, or replaced by the peer's own dial */
         sh_sleep(1);
     }
     chan_close(i);

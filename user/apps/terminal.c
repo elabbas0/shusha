@@ -215,9 +215,9 @@ static void execute(char *cmdline) {
         }
     } else if (str_eq(c, "ws")) {
         /* Built in so the workspace service's answer lands in this window. */
-        static char ws_out[4096];
+        static char ws_out[WS_MAX_FILE + 1024];
         join_args(buf, sizeof(buf), argc, argv, 1);
-        long n = ws_call(buf, ws_out, sizeof(ws_out));
+        long n = ws_run(buf, ws_out, sizeof(ws_out));
         out(ws_out, n < 0 ? FG_ERR : FG);
         /* Also to the system console: invisible on the GUI VT, but test
          * builds mirror it to serial so multi-VM scripts can read it. */

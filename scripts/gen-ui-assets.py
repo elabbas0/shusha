@@ -118,6 +118,29 @@ def draw_power(d, s):
     d.line([(8 * s, 1 * s), (8 * s, 8 * s)], fill=(214, 222, 232, 255), width=w)
 
 
+def draw_workspace(d, s):
+    # Three machines joined into one space, in the wallpaper's colours.
+    rrect(d, (5 * s, 5 * s, 43 * s, 43 * s), 10 * s, (74, 18, 96, 255))
+    rrect(d, (5 * s, 5 * s, 43 * s, 37 * s), 10 * s, (112, 30, 140, 255))
+    nodes = [(24, 14), (14, 32), (34, 32)]
+    w = int(2.4 * s)
+    for i in range(3):
+        a, b = nodes[i], nodes[(i + 1) % 3]
+        d.line([(a[0] * s, a[1] * s), (b[0] * s, b[1] * s)], fill=(233, 52, 246, 255), width=w)
+    for i, (x, y) in enumerate(nodes):
+        r = 5.2 if i == 0 else 4.4
+        d.ellipse(((x - r) * s, (y - r) * s, (x + r) * s, (y + r) * s), fill=(255, 214, 90, 255) if i == 0 else (240, 244, 250, 255))
+
+
+def draw_lock(d, s):
+    w = int(1.7 * s)
+    d.arc((4 * s, 1 * s, 12 * s, 11 * s), start=180, end=360, fill=(214, 222, 232, 255), width=w)
+    d.line([(4.85 * s, 6 * s), (4.85 * s, 8 * s)], fill=(214, 222, 232, 255), width=w)
+    d.line([(11.15 * s, 6 * s), (11.15 * s, 8 * s)], fill=(214, 222, 232, 255), width=w)
+    rrect(d, (2.5 * s, 7 * s, 13.5 * s, 15 * s), 2 * s, (230, 180, 80, 255))
+    d.ellipse((7 * s, 9.6 * s, 9 * s, 11.6 * s), fill=(90, 60, 20, 255))
+
+
 def gen_cursor():
     ss, W, H = 8, 24, 28
     pts = [(1, 1), (1, 18), (5.2, 14.2), (8.2, 21), (10.6, 20), (7.7, 13.4), (13.4, 13.4)]
@@ -143,7 +166,8 @@ for face in FACES:
     gen_face(*face)
 
 for name, fn, size in (("folder", draw_folder, 48), ("file", draw_file, 48), ("app", draw_app, 48),
-                       ("terminal", draw_terminal, 48), ("power", draw_power, 16)):
+                       ("terminal", draw_terminal, 48), ("power", draw_power, 16),
+                       ("workspace", draw_workspace, 48), ("lock", draw_lock, 16)):
     emit("#define ICON_%s_SIZE %d" % (name.upper(), size))
     c_bytes("icon_%s" % name, premul(icon(fn, size)), "uint32_t")
 

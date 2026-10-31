@@ -20,13 +20,13 @@ import sys
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DIR = os.path.join(ROOT, "build", "lan")
+DIR = os.environ.get("SHUSHA_LAN_DIR", os.path.join(ROOT, "build", "lan"))
 KEYS = {" ": "spc", "/": "slash", ".": "dot", "-": "minus", "\n": "ret", ",": "comma",
         ":": "shift-semicolon", "_": "shift-minus", "=": "equal", "'": "apostrophe"}
 
 
 class Lan:
-    def __init__(self, n, iso=os.path.join(ROOT, "lan.iso"), mcast="230.0.0.1:1234", mem="256M", pcap=()):
+    def __init__(self, n, iso=os.environ.get("SHUSHA_LAN_ISO", os.path.join(ROOT, "lan.iso")), mcast="230.0.0.1:1234", mem="256M", pcap=()):
         """pcap: VM numbers whose network traffic is recorded to build/lan/vmK.pcap
         (every VM receives the whole segment, so one capture sees all of it)."""
         self.n, self.iso, self.mcast, self.mem, self.pcap = n, iso, mcast, mem, set(pcap)

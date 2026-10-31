@@ -9,8 +9,9 @@ IPC access control, added without new call numbers:
   process can only map a region whose handle it was given.
 - `SYS_MSG_RECV` (`rdi` handle, `rsi` buffer, `rdx` flags): bit 0 is the
   old "block" argument; bit 1 makes a successful call return the
-  sender's pid (stamped by the kernel at send time) instead of 0. Upper
-  bits are ignored. Only the queue's owner (its creator) may receive.
+  sender's pid (stamped by the kernel at send time) instead of 0; bit 2
+  makes it return `pid | uid << 32` (both stamped at send time), so a
+  service can tell which user is asking. Upper bits are ignored. Only the queue's owner (its creator) may receive.
 - `SYS_MSG_POLL` (`rdi` handle, `rsi` flags): with bit 0 set it returns
   the owning pid of the queue (anyone may ask). Without it, only the
   owner may poll. Callers must pass `rsi = 0` for a plain poll.
@@ -24,7 +25,8 @@ File ownership (Shusha, no new numbers):
   struct).
 - File syscalls check Unix-style owner/other `rwx` bits against the
   caller's uid (root, uid 0, may do anything except write the read-only
-  image): read/read_at need `r`, write/create/mkdir need `w` on the file
+  image): read/read_at need `r` (a denied read_at returns -1, unlike a
+  read past the end, which returns 0), write/create/mkdir need `w` on the file
   or its parent directory, list_dir needs `r`, chdir needs `x`.
 - Control files, used through `SYS_VFS_WRITE`/`SYS_VFS_READ`:
   `/dev/setuid` (write "<uid>"; root may pick any uid, others only their

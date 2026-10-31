@@ -166,6 +166,8 @@ static inline int      sh_msg_send(uint64_t q, const void *m)   { return (int)sy
 static inline int      sh_msg_recv(uint64_t q, void *m, int block) { return (int)sys3(SYS_MSG_RECV, q, U(m), (uint64_t)(block & 1)); }
 /* Receive and report the sender's pid (kernel-stamped): returns pid > 0, or -1. */
 static inline long     sh_msg_recv_from(uint64_t q, void *m)   { return (long)sys3(SYS_MSG_RECV, q, U(m), 2); }
+/* pid | uid << 32 of the sender (kernel-stamped), or <= 0 if empty. */
+static inline long     sh_msg_recv_cred(uint64_t q, void *m)   { return (long)sys3(SYS_MSG_RECV, q, U(m), 4); }
 /* Pid of the process that owns (created) a queue. */
 static inline long     sh_msg_owner(uint64_t q)                { return (long)sys2(SYS_MSG_POLL, q, 1); }
 static inline uint64_t sh_map_framebuffer(sh_fb_info_t *i)      { return sys1(SYS_MAP_FRAMEBUFFER, U(i)); }

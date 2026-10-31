@@ -36,6 +36,11 @@ int  chan_init(const uint8_t sign_seed[32], const uint8_t sign_pub[32], uint16_t
  * traffic while waiting; messages that arrive meanwhile are queued for
  * chan_poll.  Returns channel index or -1. */
 int  chan_connect(const uint8_t ip[4], uint16_t port, uint64_t timeout_ticks);
+/* Non-blocking: the open channel to ip:port, or -1 after starting (or
+ * re-sending) a handshake that chan_poll will complete. */
+int  chan_open(const uint8_t ip[4], uint16_t port);
+/* The open channel authenticated as peer_pub, or -1. */
+int  chan_find(const uint8_t peer_pub[32]);
 int  chan_send(int chan, const void *data, uint64_t len);
 /* Next decrypted application message (1), or 0 if none waiting. */
 int  chan_poll(chan_msg_t *out);

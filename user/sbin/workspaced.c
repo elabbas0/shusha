@@ -18,6 +18,16 @@
  *    derive), plus one box per explicit grant.  The object is signed by the owner (or the higher
  *    rank who granted) and replicated to every member, so members keep
  *    working while the admin is offline.
+ *
+ * Separation from personal files: the workspace belongs to the local
+ * user who created or joined it (other users of this machine are
+ * refused), and nothing enters it unless that user adds it - the `ws`
+ * client reads the file with the user's own permissions and hands over
+ * the contents, so the daemon never opens a personal path itself.
+ *
+ * Live state for the desktop: members are pinged every 2 s (presence),
+ * notable events are kept in a short list, and a summary is written to
+ * /var/ws/status (readable only by the workspace's user) for the top bar.
  */
 #include "lib.h"
 #include "net.h"
@@ -43,8 +53,12 @@ enum { E_GENESIS = 1, E_JOIN = 2 };
 enum {
     M_JOIN_REQ = 1, M_JOIN_OK, M_JOIN_FAIL, M_LOG_GET, M_LOG_ENTRY, M_LOG_END,
     M_WRAP_GET, M_WRAP, M_NOTIFY, M_FILE_CHUNK, M_FILE_LIST_GET, M_FILE_LIST,
-    M_FILE_GET, M_ACCESS_REQ, M_ACK
+    M_FILE_GET, M_ACCESS_REQ, M_ACK, M_PING, M_PONG
 };
+
+#define BEAT_TICKS    200 /* presence ping interval */
+#define OFFLINE_TICKS 700 /* silent this long = offline */
+#define MAXEV         12
 enum { BOX_MEMBER = 1, BOX_RANK = 2 };
 
 typedef struct {
@@ -57,6 +71,9 @@ typedef struct {
     uint8_t ip[4];
     int have_wrap;
     sc_wrap_pub_t wrap;
+    /* runtime only (reset at start) */
+    uint64_t last_seen;
+    int online, need_sync;
 } member_t;
 
 enum { INV_FREE = 0, INV_OPEN, INV_USED };
@@ -74,6 +91,7 @@ typedef struct {
 typedef struct {
     uint32_t magic;
     int active;
+    uint32_t owner_uid;       /* the local user this workspace belongs to */
     uint8_t ws_id[16];
     char ws_name[32];
     uint8_t admin_pub[32];
@@ -96,11 +114,16 @@ static sc_wrap_priv_t wrap_priv;
 static uint8_t my_ip[4];
 
 /* Command output for the current `ws` request. */
-static char out[8192];
+static char out[MAX_CONTENT + 2048];
 static uint64_t out_len;
 
 static void say(const char *s) {
     while (*s && out_len + 1 < sizeof(out)) out[out_len++] = *s++;
+    out[out_len] = '\0';
+}
+
+static void say_bytes(const uint8_t *p, uint64_t n) {
+    while (n-- && out_len + 1 < sizeof(out)) out[out_len++] = (char)*p++;
     out[out_len] = '\0';
 }
 
@@ -123,6 +146,40 @@ static void log_line(const char *s) {
     print("workspaced: ");
     print(s);
     print("\n");
+}
+
+/* ---- events ------------------------------------------------------------ */
+
+typedef struct {
+    uint64_t tick;
+    char text[80];
+} event_t;
+
+static event_t evs[MAXEV];
+static int nev;
+static char busy_text[64];
+static void write_status(void);
+
+static void event(const char *a, const char *b, const char *c) {
+    event_t e;
+    e.tick = sh_ticks();
+    str_copy(e.text, a, sizeof(e.text));
+    if (b) str_cat(e.text, b, sizeof(e.text));
+    if (c) str_cat(e.text, c, sizeof(e.text));
+    if (nev == MAXEV) {
+        for (int i = 1; i < MAXEV; i++) evs[i - 1] = evs[i];
+        nev--;
+    }
+    evs[nev++] = e;
+    log_line(e.text);
+    write_status();
+}
+
+/* Shown in the top bar while a slow network operation runs. */
+static void set_busy(const char *a, const char *b) {
+    str_copy(busy_text, a ? a : "", sizeof(busy_text));
+    if (b) str_cat(busy_text, b, sizeof(busy_text));
+    write_status();
 }
 
 /* ---- persistence ------------------------------------------------------- */
@@ -236,10 +293,14 @@ static int replay_log(void) {
         member_t *m = st.m[i].used ? &st.m[i] : 0;
         if (!m) continue;
         for (int k = 0; k < MAXM; k++) {
-            if (keep[k].used && keep[k].have_wrap && mem_eq_ct(keep[k].sign_pub, m->sign_pub, 32)) {
+            if (!keep[k].used || !mem_eq_ct(keep[k].sign_pub, m->sign_pub, 32)) continue;
+            if (keep[k].have_wrap) {
                 m->have_wrap = 1;
                 m->wrap = keep[k].wrap;
             }
+            m->last_seen = keep[k].last_seen;
+            m->online = keep[k].online;
+            m->need_sync = keep[k].need_sync;
         }
         if (mem_eq_ct(m->sign_pub, sign_pub, 32)) {
             m->have_wrap = 1;
@@ -314,6 +375,7 @@ static int rank_key(uint8_t out32[32], int target) {
 /* ---- RPC over channels ------------------------------------------------- */
 
 static void handle_peer(chan_msg_t *m);
+static int decrypt_name(char name[65], const uint8_t *o, const uint8_t fk[32]);
 
 static chan_msg_t rx;
 
@@ -338,10 +400,20 @@ static int rpc(int ch, const uint8_t *req, uint64_t len, uint8_t want, chan_msg_
     return -1;
 }
 
+static int is_me(const member_t *m) {
+    return mem_eq_ct(m->sign_pub, sign_pub, 32);
+}
+
+/* A channel to a member: the open one if there is one; a fresh handshake
+ * only if the member is believed online, so offline machines never
+ * stall the daemon. */
 static int connect_member(const member_t *m) {
     int ch;
     const uint8_t *peer;
-    if (mem_eq_ct(m->ip, my_ip, 4)) return -1;
+    if (is_me(m) || mem_eq_ct(m->ip, my_ip, 4)) return -1;
+    ch = chan_find(m->sign_pub);
+    if (ch >= 0) return ch;
+    if (!m->online) return -1;
     ch = chan_connect(m->ip, WS_PORT, 300);
     if (ch < 0) return -1;
     peer = chan_peer(ch);
@@ -351,6 +423,45 @@ static int connect_member(const member_t *m) {
         return -1;
     }
     return ch;
+}
+
+/* ---- presence ---------------------------------------------------------- */
+
+static int online_count(void) {
+    int n = 0;
+    for (int i = 0; i < MAXM; i++) n += st.m[i].used && (st.m[i].online || is_me(&st.m[i]));
+    return n;
+}
+
+/* Any authenticated message from a member counts as a sign of life. */
+static void seen(member_t *m) {
+    m->last_seen = sh_ticks();
+    if (!m->online) {
+        m->online = 1;
+        m->need_sync = 1; /* catch up on whatever changed while apart */
+        event(m->name, " is online", 0);
+    }
+}
+
+/* Ping every member with an open channel and start handshakes to the
+ * rest; anyone silent for OFFLINE_TICKS is marked offline and their
+ * channel dropped, so a restarted peer gets a fresh handshake. */
+static void heartbeat(void) {
+    uint8_t ping = M_PING;
+    for (int i = 0; i < MAXM; i++) {
+        member_t *m = &st.m[i];
+        int ch;
+        if (!m->used || is_me(m) || mem_eq_ct(m->ip, my_ip, 4)) continue;
+        ch = chan_find(m->sign_pub);
+        if (m->online && sh_ticks() - m->last_seen > OFFLINE_TICKS) {
+            m->online = 0;
+            if (ch >= 0) chan_close(ch);
+            ch = -1;
+            event(m->name, " went offline", 0);
+        }
+        if (ch >= 0) (void)chan_send(ch, &ping, 1);
+        else (void)chan_open(m->ip, WS_PORT);
+    }
 }
 
 /* ---- files ------------------------------------------------------------- *
@@ -487,6 +598,90 @@ static void store_object(const uint8_t *o, uint64_t len) {
     (void)sh_write_file(path, o, len);
 }
 
+/* ---- status file -------------------------------------------------------- */
+
+static int nfiles, nlocked, files_dirty = 1;
+
+static int hex_id(uint8_t id[16], const char *h) {
+    for (int k = 0; k < 16; k++) {
+        int v = 0;
+        for (int j = 0; j < 2; j++) {
+            char c = h[2 * k + j];
+            int d = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1;
+            if (d < 0) return -1;
+            v = v * 16 + d;
+        }
+        id[k] = (uint8_t)v;
+    }
+    return 0;
+}
+
+/* Calls fn(id) for every stored object; stops early if fn returns 1. */
+static void each_file(int (*fn)(const uint8_t id[16], void *arg), void *arg) {
+    char names[2048];
+    long n = sh_list_dir(WS_DIR "/files", names, sizeof(names));
+    for (long i = 0; n > 0 && i < n;) {
+        uint8_t id[16];
+        long j = i;
+        while (j < n && names[j] != '\n') j++;
+        if (j - i == 32 && hex_id(id, names + i) == 0 && fn(id, arg)) return;
+        i = j + 1;
+    }
+}
+
+static int count_one(const uint8_t id[16], void *arg) {
+    uint8_t fk[32];
+    (void)arg;
+    if (load_object(obj2, id) <= 0) return 0;
+    nfiles++;
+    if (file_key(fk, obj2) != 0) nlocked++;
+    mem_wipe(fk, 32);
+    return 0;
+}
+
+static void st_line(char *b, const char *k, const char *v) {
+    str_cat(b, k, 512);
+    str_cat(b, " ", 512);
+    str_cat(b, v, 512);
+    str_cat(b, "\n", 512);
+}
+
+/* One "key value" per line; the WM's top bar reads it.  Owned by the
+ * workspace's user, mode 0600: other local users learn nothing. */
+static void write_status(void) {
+    static char last[512];
+    char b[512], n[24], ip[16];
+    b[0] = '\0';
+    st_line(b, "active", st.active ? "1" : "0");
+    st_line(b, "address", net_ip_text(ip, my_ip));
+    if (st.active) {
+        int nreq = st.nreq;
+        if (files_dirty) {
+            nfiles = nlocked = 0;
+            each_file(count_one, 0);
+            files_dirty = 0;
+        }
+        st_line(b, "name", st.ws_name);
+        st_line(b, "rank", fmt_u64(n, (uint64_t)st.my_rank, 10));
+        st_line(b, "members", fmt_u64(n, (uint64_t)member_count(), 10));
+        st_line(b, "online", fmt_u64(n, (uint64_t)online_count(), 10));
+        st_line(b, "requests", fmt_u64(n, (uint64_t)nreq, 10));
+        st_line(b, "files", fmt_u64(n, (uint64_t)nfiles, 10));
+        st_line(b, "locked", fmt_u64(n, (uint64_t)nlocked, 10));
+        if (busy_text[0]) st_line(b, "busy", busy_text);
+        if (nev) {
+            str_cat(b, "event ", sizeof(b));
+            str_cat(b, fmt_u64(n, evs[nev - 1].tick, 10), sizeof(b));
+            st_line(b, "", evs[nev - 1].text);
+        }
+    }
+    if (str_eq(b, last)) return;
+    str_copy(last, b, sizeof(last));
+    (void)sh_write_file(WS_DIR "/status", b, str_len(b));
+    (void)sh_chown(WS_DIR "/status", st.active ? st.owner_uid : 0);
+    (void)sh_chmod(WS_DIR "/status", st.active ? 0600 : 0644);
+}
+
 /* ---- peer message handling (never blocks) ------------------------------- */
 
 static uint8_t rxbuf[MAX_OBJECT];
@@ -545,7 +740,7 @@ static void handle_peer(chan_msg_t *msg) {
             }
         }
         if (inv < 0) {
-            log_line("rejected a join with an invalid or used invite");
+            event("Refused a join with an invalid or used invite", 0, 0);
             goto fail;
         }
         if (member_by_pub(msg->peer_pub)) goto fail;
@@ -576,6 +771,10 @@ static void handle_peer(chan_msg_t *msg) {
             m->wrap = w;
         }
         save_state();
+        {
+            char rn[8];
+            event((const char *)body + 1, " joined as rank ", fmt_u64(rn, (uint64_t)rank, 10));
+        }
         r[0] = M_JOIN_OK;
         r[1] = (uint8_t)rank;
         {
@@ -599,8 +798,15 @@ static void handle_peer(chan_msg_t *msg) {
     /* Everything else is for members only. */
     if (!peer) return;
     if (!mem_eq_ct(peer->ip, msg->from.ip, 4)) mem_copy(peer->ip, msg->from.ip, 4);
+    seen(peer);
 
     switch (d[0]) {
+    case M_PING:
+        r[0] = M_PONG;
+        reply(ch, r, 1);
+        break;
+    case M_PONG:
+        break;
     case M_LOG_GET: {
         uint32_t seq = sc_load32_le(d + 1);
         if (seq < st.log_len) {
@@ -642,9 +848,20 @@ static void handle_peer(chan_msg_t *msg) {
         if (off + n == rx_total) {
             long len = verify_object(rxbuf, rx_total);
             if (len > 0 && mem_eq_ct(rxbuf + OFF_ID, rx_id, 16)) {
+                uint8_t fk[32];
+                char name[65];
+                int had = load_object(obj2, rx_id) > 0, had_key = had && file_key(fk, obj2) == 0;
+                int now_key = file_key(fk, rxbuf) == 0 && decrypt_name(name, rxbuf, fk) == 0;
+                member_t *owner = member_by_rank(rxbuf[OFF_OWNER]);
+                mem_wipe(fk, 32);
                 store_object(rxbuf, (uint64_t)len);
+                files_dirty = 1;
                 r[0] = M_ACK;
                 reply(ch, r, 1);
+                if (!had) event(owner ? owner->name : "someone", now_key ? " shared " : " shared a locked file",
+                                now_key ? name : 0);
+                else if (!had_key && now_key) event("You can now open ", name, 0);
+                else write_status();
             } else {
                 log_line("dropped a file object with a bad signature");
             }
@@ -680,17 +897,29 @@ static void handle_peer(chan_msg_t *msg) {
         if (len > 0) push_object(ch, obj2, (uint64_t)len);
         break;
     }
-    case M_ACCESS_REQ:
-        if (st.nreq < MAXREQ) {
+    case M_ACCESS_REQ: {
+        int dup = 0;
+        for (int i = 0; i < st.nreq; i++) {
+            dup |= st.req[i].rank == peer->rank && mem_eq_ct(st.req[i].file_id, d + 1, 16);
+        }
+        if (!dup && st.nreq < MAXREQ) {
+            uint8_t fk[32];
+            char name[65];
             mem_copy(st.req[st.nreq].file_id, d + 1, 16);
             st.req[st.nreq].rank = peer->rank;
             st.nreq++;
             save_state();
-            log_line("access request received (see: ws requests)");
+            if (load_object(obj2, d + 1) > 0 && file_key(fk, obj2) == 0 && decrypt_name(name, obj2, fk) == 0) {
+                event(peer->name, " asks for ", name);
+            } else {
+                event(peer->name, " asks for access to a file", 0);
+            }
+            mem_wipe(fk, 32);
         }
         r[0] = M_ACK;
         reply(ch, r, 1);
         break;
+    }
     }
 }
 
@@ -710,6 +939,7 @@ static int fetch_wrap(int ch, member_t *m) {
 static int sync_with(int ch) {
     uint8_t req[5];
     int added = 0;
+    uint32_t first_new = st.log_len;
     for (;;) {
         req[0] = M_LOG_GET;
         sc_store32_le(req + 1, st.log_len);
@@ -723,6 +953,15 @@ static int sync_with(int ch) {
             return -1;
         }
         added++;
+    }
+    if (st.active) {
+        for (uint32_t e = first_new; e < st.log_len; e++) {
+            const uint8_t *body = st.log[e] + 5;
+            char rn[8];
+            if (st.log[e][4] == E_JOIN && !mem_eq_ct(body + 25, sign_pub, 32)) {
+                event((const char *)body + 1, " joined as rank ", fmt_u64(rn, body[0], 10));
+            }
+        }
     }
     for (int i = 0; i < MAXM; i++) {
         if (st.m[i].used && !st.m[i].have_wrap) (void)fetch_wrap(ch, &st.m[i]);
@@ -802,6 +1041,12 @@ static int b32_decode(uint8_t *outp, int n, const char *in) {
 
 /* ---- commands ---------------------------------------------------------- */
 
+/* The local user making the current request (kernel-stamped). */
+static uint32_t req_uid;
+static int raw_ok; /* `raw` succeeded: the output is file content */
+static const uint8_t *req_payload;
+static uint64_t req_payload_len;
+
 static void cmd_status(void) {
     char ip[16];
     say("device   ");
@@ -841,9 +1086,12 @@ static void cmd_create(const char *name) {
         return;
     }
     st.active = 1;
+    st.owner_uid = req_uid;
     st.my_rank = 0;
     rand_bytes(st.my_rk, 32);
+    files_dirty = 1;
     save_state();
+    event("Created workspace ", st.ws_name, 0);
     say("created workspace ");
     say(st.ws_name);
     say(" - you are rank 0 (admin)\n");
@@ -892,7 +1140,9 @@ static void cmd_join(const char *code, const char *name) {
         return;
     }
     mem_copy(ip, raw, 4);
+    set_busy("Joining a workspace", 0);
     ch = chan_connect(ip, (uint16_t)(raw[4] | raw[5] << 8), 400);
+    set_busy(0, 0);
     if (ch < 0) {
         say("cannot reach the workspace admin\n");
         return;
@@ -926,7 +1176,14 @@ static void cmd_join(const char *code, const char *name) {
         return;
     }
     st.active = 1;
+    st.owner_uid = req_uid;
+    files_dirty = 1;
+    {
+        member_t *admin = member_by_rank(0);
+        if (admin) seen(admin); /* we just talked to it */
+    }
     save_state();
+    event("Joined workspace ", st.ws_name, 0);
     say("joined workspace ");
     say(st.ws_name);
     say(" as rank ");
@@ -981,8 +1238,11 @@ static void replicate(const uint8_t *o, uint64_t len) {
         if (!st.m[i].used || mem_eq_ct(st.m[i].sign_pub, sign_pub, 32)) continue;
         others++;
         ch = connect_member(&st.m[i]);
-        if (ch >= 0 && push_acked(ch, o, len) == 0) sent++;
+        if (ch < 0) continue;
+        set_busy("Sending to ", st.m[i].name);
+        if (push_acked(ch, o, len) == 0) sent++;
     }
+    set_busy(0, 0);
     say("replicated to ");
     say_u((uint64_t)sent);
     say(" of ");
@@ -991,25 +1251,29 @@ static void replicate(const uint8_t *o, uint64_t len) {
     say(sent < others ? " - the rest pick it up on their next sync\n" : "\n");
 }
 
-static void cmd_put(const char *path) {
+/* Share a copy of a file the user handed over.  The client read it with
+ * the user's own permissions; the daemon never opens personal paths. */
+static void cmd_put(const char *base) {
     uint8_t fk[32];
     char name[65], purpose[48];
-    long size;
+    long size = (long)req_payload_len;
     uint64_t p;
-    const char *base = path;
     member_t *me = member_by_pub(sign_pub);
     if (!st.active || !me) {
         say("no workspace\n");
         return;
     }
-    size = sh_read_at(path, 0, (char *)plain, MAX_CONTENT);
-    if (size < 0) {
-        say("cannot read that file\n");
+    if (!req_payload || size > MAX_CONTENT) {
+        say(req_payload ? "file too large (8 KB limit for now)\n" : "nothing to share\n");
         return;
     }
-    for (const char *c = path; *c; c++) {
-        if (*c == '/') base = c + 1;
+    for (const char *c = base; *c; c++) {
+        if (*c == '/' || *c < 32) {
+            say("bad file name\n");
+            return;
+        }
     }
+    mem_copy(plain, req_payload, (uint64_t)size);
     mem_set(name, 0, sizeof(name));
     str_copy(name, base, sizeof(name));
     rand_bytes(fk, 32);
@@ -1039,11 +1303,13 @@ static void cmd_put(const char *path) {
     mem_wipe(fk, 32);
     sign_object(obj, p);
     store_object(obj, p + 64);
+    files_dirty = 1;
     say("shared ");
     say(name);
     say(" (");
     say_u((uint64_t)size);
     say(" bytes, encrypted)\n");
+    event("You shared ", name, 0);
     replicate(obj, p + 64);
 }
 
@@ -1104,7 +1370,9 @@ static int find_file(const char *want, uint8_t fk[32], int *have_key) {
                 id[k] = (uint8_t)(((hi <= '9' ? hi - '0' : hi - 'a' + 10) << 4) | (lo <= '9' ? lo - '0' : lo - 'a' + 10));
             }
             if (load_object(obj, id) > 0) {
+                uint8_t want_id[16];
                 *have_key = file_key(fk, obj) == 0;
+                if (want[0] == '#' && hex_id(want_id, want + 1) == 0 && mem_eq_ct(want_id, id, 16)) return 0;
                 if (*have_key && decrypt_name(name, obj, fk) == 0 && str_eq(name, want)) return 0;
                 if (!*have_key && str_starts(want, "rank") && obj[OFF_OWNER] == (uint8_t)(want[4] - '0')) return 0;
                 locked |= !*have_key;
@@ -1116,7 +1384,8 @@ static int find_file(const char *want, uint8_t fk[32], int *have_key) {
     return -1;
 }
 
-static void cmd_cat(const char *name) {
+/* raw: exact bytes, for `ws get` and the Workspace app. */
+static void cmd_cat(const char *name, int raw) {
     uint8_t fk[32];
     int have;
     uint32_t size;
@@ -1136,6 +1405,9 @@ static void cmd_cat(const char *name) {
     if (sc_xaead_open(plain, obj + OFF_BODY + 24, size, obj + OFF_BODY + 24 + size, obj + OFF_ID, 16,
                       obj + OFF_BODY, fk) != 0) {
         say("file failed authentication\n");
+    } else if (raw) {
+        say_bytes(plain, size);
+        raw_ok = 1;
     } else {
         plain[size] = '\0';
         say((char *)plain);
@@ -1172,6 +1444,7 @@ static void cmd_request(const char *name) {
     say("access requested from rank ");
     say_u(obj[OFF_OWNER]);
     say("\n");
+    event("Asked ", owner->name, " for access");
 }
 
 static void cmd_requests(void) {
@@ -1235,6 +1508,8 @@ static void cmd_grant(const char *name, int rank) {
     say(" to rank ");
     say_u((uint64_t)rank);
     say("\n");
+    files_dirty = 1;
+    event("You granted ", m->name, " access");
     replicate(obj, p + 64);
 }
 
@@ -1249,11 +1524,128 @@ static void cmd_sync(void) {
         if (!st.m[i].used || mem_eq_ct(st.m[i].sign_pub, sign_pub, 32)) continue;
         ch = connect_member(&st.m[i]);
         if (ch < 0) continue;
+        set_busy("Syncing with ", st.m[i].name);
         if (sync_with(ch) >= 0) done++;
     }
+    set_busy(0, 0);
+    files_dirty = 1;
+    write_status();
     say("synced with ");
     say_u((uint64_t)done);
     say(" member(s)\n");
+}
+
+static void cmd_deny(const char *name, int rank) {
+    uint8_t fk[32];
+    int have, n = st.nreq;
+    if (find_file(name, fk, &have) != 0) {
+        say("no such shared file\n");
+        return;
+    }
+    mem_wipe(fk, 32);
+    for (int i = 0; i < st.nreq; i++) {
+        if (st.req[i].rank == rank && mem_eq_ct(st.req[i].file_id, obj + OFF_ID, 16)) {
+            st.req[i] = st.req[--st.nreq];
+            i--;
+        }
+    }
+    save_state();
+    write_status();
+    say(n != st.nreq ? "request dismissed\n" : "no such request\n");
+}
+
+static void q_tab(const char *s) {
+    say(s);
+    say("\t");
+}
+
+static void q_status(void) {
+    char ip[16];
+    say("active\t");
+    say(st.active ? "1\n" : "0\n");
+    say("address\t");
+    say(net_ip_text(ip, my_ip));
+    say("\ndevice\t");
+    say_hex(sign_pub, 6);
+    say("\n");
+    if (!st.active) return;
+    say("name\t");
+    say(st.ws_name);
+    say("\nrank\t");
+    say_u((uint64_t)st.my_rank);
+    say("\nmembers\t");
+    say_u((uint64_t)member_count());
+    say("\nonline\t");
+    say_u((uint64_t)online_count());
+    say("\nrequests\t");
+    say_u((uint64_t)st.nreq);
+    say("\n");
+}
+
+static void q_members(void) {
+    char ip[16];
+    for (int r = 0; r < MAXM; r++) {
+        member_t *m = member_by_rank(r);
+        if (!m) continue;
+        say_u((uint64_t)r);
+        say("\t");
+        q_tab(m->name);
+        q_tab(net_ip_text(ip, m->ip));
+        q_tab(is_me(m) ? "you" : m->online ? "online" : "offline");
+        say_hex(m->sign_pub, 6);
+        say("\n");
+    }
+}
+
+/* id, name (empty if locked), owner rank, owner name, open?, size */
+static int q_file_one(const uint8_t id[16], void *arg) {
+    uint8_t fk[32];
+    char name[65];
+    member_t *owner;
+    int open;
+    (void)arg;
+    if (load_object(obj, id) <= 0) return 0;
+    open = file_key(fk, obj) == 0 && decrypt_name(name, obj, fk) == 0;
+    mem_wipe(fk, 32);
+    owner = member_by_rank(obj[OFF_OWNER]);
+    say_hex(id, 16);
+    say("\t");
+    q_tab(open ? name : "");
+    say_u(obj[OFF_OWNER]);
+    say("\t");
+    q_tab(owner ? owner->name : "?");
+    q_tab(open ? "open" : "locked");
+    say_u(sc_load32_le(obj + OFF_SIZE));
+    say("\n");
+    return 0;
+}
+
+static void q_requests(void) {
+    for (int i = 0; i < st.nreq; i++) {
+        uint8_t fk[32];
+        char name[65];
+        member_t *m = member_by_rank(st.req[i].rank);
+        say_u(st.req[i].rank);
+        say("\t");
+        q_tab(m ? m->name : "?");
+        say_hex(st.req[i].file_id, 16);
+        say("\t");
+        if (load_object(obj, st.req[i].file_id) > 0 && file_key(fk, obj) == 0 && decrypt_name(name, obj, fk) == 0) {
+            say(name);
+        }
+        mem_wipe(fk, 32);
+        say("\n");
+    }
+}
+
+/* Newest first: seconds ago, text. */
+static void q_events(void) {
+    for (int i = nev - 1; i >= 0; i--) {
+        say_u((sh_ticks() - evs[i].tick) / 100);
+        say("\t");
+        say(evs[i].text);
+        say("\n");
+    }
 }
 
 static void run_command(char *line) {
@@ -1261,6 +1653,21 @@ static void run_command(char *line) {
     int argc = split_args(line, argv, 8);
     out_len = 0;
     out[0] = '\0';
+    /* One workspace per machine, owned by the user who made or joined it.
+     * Anyone else is told nothing beyond that. */
+    if (st.active && req_uid != st.owner_uid) {
+        if (argc > 1 && str_eq(argv[0], "q") && str_eq(argv[1], "status")) say("active\t0\nforeign\t1\n");
+        else say("This machine's workspace belongs to another user.\n");
+        return;
+    }
+    if (argc > 1 && str_eq(argv[0], "q")) {
+        if (str_eq(argv[1], "status")) q_status();
+        else if (str_eq(argv[1], "members")) q_members();
+        else if (str_eq(argv[1], "files")) each_file(q_file_one, 0);
+        else if (str_eq(argv[1], "requests")) q_requests();
+        else if (str_eq(argv[1], "events")) q_events();
+        return;
+    }
     if (!argc || str_eq(argv[0], "status")) cmd_status();
     else if (str_eq(argv[0], "create") && argc > 1) cmd_create(argv[1]);
     else if (str_eq(argv[0], "invite")) cmd_invite();
@@ -1268,15 +1675,17 @@ static void run_command(char *line) {
     else if (str_eq(argv[0], "members")) cmd_members();
     else if (str_eq(argv[0], "put") && argc > 1) cmd_put(argv[1]);
     else if (str_eq(argv[0], "files")) cmd_files();
-    else if (str_eq(argv[0], "cat") && argc > 1) cmd_cat(argv[1]);
+    else if (str_eq(argv[0], "cat") && argc > 1) cmd_cat(argv[1], 0);
+    else if (str_eq(argv[0], "raw") && argc > 1) cmd_cat(argv[1], 1);
+    else if (str_eq(argv[0], "deny") && argc > 2) cmd_deny(argv[1], (int)(argv[2][0] - '0'));
     else if (str_eq(argv[0], "request") && argc > 1) cmd_request(argv[1]);
     else if (str_eq(argv[0], "requests")) cmd_requests();
     else if (str_eq(argv[0], "grant") && argc > 2) cmd_grant(argv[1], (int)(argv[2][0] - '0'));
     else if (str_eq(argv[0], "sync")) cmd_sync();
     else {
         say("usage: ws status | create <name> | invite | join <code> [name] | members\n"
-            "          put <file> | files | cat <file> | request <file> | requests\n"
-            "          grant <file> <rank> | sync\n");
+            "          put <file> | get <file> <dest> | files | cat <file> | request <file>\n"
+            "          requests | grant <file> <rank> | deny <file> <rank> | sync\n");
     }
 }
 
@@ -1320,30 +1729,67 @@ int main(void) {
         return 1;
     }
     log_line("ready");
+    for (int i = 0; i < MAXM; i++) {
+        st.m[i].online = 0;
+        st.m[i].last_seen = 0;
+        st.m[i].need_sync = 0;
+    }
+    write_status();
 
     for (;;) {
+        static uint8_t inbuf[256 + MAX_CONTENT + 1];
+        static uint64_t last_beat;
         ws_ctl_t m;
-        long from;
+        long cred;
         int busy = 0;
 
-        while ((from = sh_msg_recv_from(ctl, &m)) > 0) {
+        while ((cred = sh_msg_recv_cred(ctl, &m)) > 0) {
             char in_path[64], out_path[64], n[24], line[256];
             ws_ctl_t done;
-            uint64_t q;
+            sh_stat_t ist;
+            long len;
+            uint64_t q, from = (uint64_t)cred & 0xffffffffu, nl = 0;
+            int is_raw;
             busy = 1;
             /* A request is honoured only from the process it names. */
-            if (m.type != WS_CTL_RUN || (long)m.pid != from) continue;
+            if (m.type != WS_CTL_RUN || m.pid != from) continue;
+            req_uid = (uint32_t)((uint64_t)cred >> 32);
             str_copy(in_path, WS_IO_DIR "/", sizeof(in_path));
             str_cat(in_path, fmt_u64(n, m.pid, 10), sizeof(in_path));
             str_copy(out_path, in_path, sizeof(out_path));
             str_cat(in_path, ".in", sizeof(in_path));
             str_cat(out_path, ".out", sizeof(out_path));
-            if (sh_read(in_path, line, sizeof(line)) < 0) line[0] = '\0';
-            run_command(line);
+            /* The request file must be the requester's own and not
+             * writable by others, or someone could swap the command. */
+            len = sh_stat(in_path, &ist) == 0 && ist.uid == req_uid && !(ist.mode & 0002)
+                      ? sh_read(in_path, (char *)inbuf, sizeof(inbuf) - 1) : -1;
+            raw_ok = 0;
+            is_raw = 0;
+            if (len < 0) {
+                out_len = 0;
+                say("ws: request refused (the request file is not yours alone)\n");
+            } else {
+                inbuf[len] = 0;
+                while (nl < (uint64_t)len && inbuf[nl]) nl++;
+                str_copy(line, (char *)inbuf, sizeof(line));
+                req_payload = nl + 1 <= (uint64_t)len ? inbuf + nl + 1 : 0;
+                req_payload_len = req_payload ? (uint64_t)len - nl - 1 : 0;
+                is_raw = str_starts(line, "raw ");
+                run_command(line);
+                req_payload = 0;
+                mem_wipe(inbuf, (uint64_t)len);
+            }
+            /* The answer may hold decrypted content: make the file the
+             * requester's and private before writing it. */
+            (void)sh_write_file(out_path, "", 0);
+            (void)sh_chown(out_path, req_uid);
+            (void)sh_chmod(out_path, 0600);
             (void)sh_write_file(out_path, out, out_len);
+            mem_wipe(out, out_len);
             mem_set(&done, 0, sizeof(done));
             done.type = WS_CTL_DONE;
             done.pid = m.pid;
+            done.status = is_raw && !raw_ok;
             str_copy(line, "/proc/", sizeof(line));
             str_cat(line, n, sizeof(line));
             str_cat(line, "/ws", sizeof(line));
@@ -1353,6 +1799,23 @@ int main(void) {
         while (chan_poll(&rx)) {
             busy = 1;
             handle_peer(&rx);
+        }
+        if (st.active && sh_ticks() - last_beat >= BEAT_TICKS) {
+            last_beat = sh_ticks();
+            heartbeat();
+            write_status();
+        }
+        for (int i = 0; i < MAXM; i++) {
+            member_t *mm = &st.m[i];
+            int ch;
+            if (!mm->used || !mm->need_sync || (ch = chan_find(mm->sign_pub)) < 0) continue;
+            mm->need_sync = 0;
+            set_busy("Syncing with ", mm->name);
+            (void)sync_with(ch);
+            set_busy(0, 0);
+            files_dirty = 1;
+            write_status();
+            break; /* one per pass keeps the daemon responsive */
         }
         if (sync_pending) {
             int which = sync_pending;

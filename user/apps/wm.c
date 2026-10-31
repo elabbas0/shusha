@@ -72,7 +72,7 @@ static int drag = -1, drag_dx, drag_dy;
 static int capture = -1;
 
 /* What the pointer is over, for hover feedback. */
-enum { HV_NONE, HV_DOCK, HV_POWER, HV_CLOSE, HV_MIN, HV_MENU };
+enum { HV_NONE, HV_DOCK, HV_POWER, HV_CLOSE, HV_MIN, HV_MENU, HV_WS };
 static int hover_kind = HV_NONE, hover_idx = -1;
 
 static int power_open;
@@ -169,7 +169,7 @@ typedef struct {
     int win;           /* window index for plain-window entries */
 } dock_item_t;
 
-static dock_item_t dock[2 + MAX_WIN];
+static dock_item_t dock[3 + MAX_WIN];
 static int ndock;
 
 static int title_is(const win_t *w, const char *name) {
@@ -180,8 +180,10 @@ static void dock_build(void) {
     ndock = 0;
     dock[ndock++] = (dock_item_t){ "Explorer", "/apps/explorer.app", ICON_FOLDER, -1 };
     dock[ndock++] = (dock_item_t){ "Terminal", "/apps/terminal.app", ICON_TERMINAL, -1 };
+    dock[ndock++] = (dock_item_t){ "Workspace", "/apps/workspace.app", ICON_WORKSPACE, -1 };
     for (int i = 0; i < MAX_WIN; i++) {
-        if (!wins[i].used || title_is(&wins[i], "Explorer") || title_is(&wins[i], "Terminal")) continue;
+        if (!wins[i].used || title_is(&wins[i], "Explorer") || title_is(&wins[i], "Terminal") ||
+            title_is(&wins[i], "Workspace")) continue;
         dock[ndock++] = (dock_item_t){ wins[i].title, 0, ICON_APP, i };
     }
 }
@@ -241,6 +243,131 @@ static void update_clock(void) {
     if (!str_eq(t, clock_text)) {
         str_copy(clock_text, t, sizeof(clock_text));
         damage(clock_rect());
+    }
+}
+
+/* ---- workspace status --------------------------------------------------- *
+ * workspaced keeps /var/ws/status current (readable only by the user the
+ * workspace belongs to).  The bar shows a pill with the workspace, your
+ * rank and who is online; the latest event for a few seconds; what it is
+ * doing while it syncs; and a badge for access requests waiting on you.
+ * Clicking it opens the Workspace app. */
+
+#define WS_EVENT_TICKS 600
+#define WS_PILL_MAX    560
+
+static struct {
+    int present, active, rank, members, online, requests;
+    char name[32], busy[64], event[80];
+    uint64_t event_tick;
+} wss;
+static char wss_text[128], wss_badge[24];
+static uint32_t wss_dot;
+static int wss_pulse;
+
+static long parse_num(const char *p) {
+    long v = 0;
+    while (*p >= '0' && *p <= '9') v = v * 10 + (*p++ - '0');
+    return v;
+}
+
+static void wss_read(void) {
+    char buf[512];
+    long n = sh_read("/var/ws/status", buf, sizeof(buf) - 1);
+    mem_set(&wss, 0, sizeof(wss));
+    if (n <= 0) return;
+    buf[n] = '\0';
+    wss.present = 1;
+    for (char *line = buf; *line;) {
+        char *end = line, *val;
+        while (*end && *end != '\n') end++;
+        if (*end) *end++ = '\0';
+        for (val = line; *val && *val != ' '; val++) {}
+        if (*val) *val++ = '\0';
+        if (str_eq(line, "active")) wss.active = (int)parse_num(val);
+        else if (str_eq(line, "rank")) wss.rank = (int)parse_num(val);
+        else if (str_eq(line, "members")) wss.members = (int)parse_num(val);
+        else if (str_eq(line, "online")) wss.online = (int)parse_num(val);
+        else if (str_eq(line, "requests")) wss.requests = (int)parse_num(val);
+        else if (str_eq(line, "name")) str_copy(wss.name, val, sizeof(wss.name));
+        else if (str_eq(line, "busy")) str_copy(wss.busy, val, sizeof(wss.busy));
+        else if (str_eq(line, "event")) {
+            wss.event_tick = (uint64_t)parse_num(val);
+            while (*val && *val != ' ') val++;
+            str_copy(wss.event, *val ? val + 1 : val, sizeof(wss.event));
+        }
+        line = end;
+    }
+}
+
+static int wss_width(void) {
+    int w = 26 + text_width(wss_text) + 14;
+    if (wss_badge[0]) w += text_width_f(wss_badge, FONT_BOLD) + 18;
+    return w > WS_PILL_MAX ? WS_PILL_MAX : w;
+}
+
+static rect_t ws_rect(void) {
+    int w = wss_width();
+    return R((screen.w - w) / 2, 4, w, PANEL_H - 8);
+}
+
+/* Everything the pill may cover, old or new size. */
+static rect_t ws_area(void) {
+    return R((screen.w - WS_PILL_MAX) / 2 - 2, 0, WS_PILL_MAX + 4, PANEL_H);
+}
+
+static void update_ws_status(void) {
+    char text[128], badge[24], n[16];
+    uint32_t dot;
+    wss_read();
+    text[0] = badge[0] = '\0';
+    if (!wss.present) {
+        dot = 0;
+    } else if (!wss.active) {
+        str_copy(text, "No workspace", sizeof(text));
+        dot = 0x5b6676;
+    } else if (wss.busy[0]) {
+        str_copy(text, wss.busy, sizeof(text));
+        str_cat(text, "\xe2\x80\xa6", sizeof(text)); /* ellipsis */
+        dot = (wss_pulse ^= 1) ? COL_ACCENT_HI : 0x2a6f68;
+    } else if (wss.event[0] && sh_ticks() - wss.event_tick < WS_EVENT_TICKS) {
+        str_copy(text, wss.event, sizeof(text));
+        dot = COL_ACCENT_HI;
+    } else {
+        str_copy(text, wss.name, sizeof(text));
+        str_cat(text, "  \xc2\xb7  rank ", sizeof(text));
+        str_cat(text, fmt_u64(n, (uint64_t)wss.rank, 10), sizeof(text));
+        str_cat(text, wss.rank == 0 ? " (admin)  \xc2\xb7  " : "  \xc2\xb7  ", sizeof(text));
+        str_cat(text, fmt_u64(n, (uint64_t)wss.online, 10), sizeof(text));
+        str_cat(text, " of ", sizeof(text));
+        str_cat(text, fmt_u64(n, (uint64_t)wss.members, 10), sizeof(text));
+        str_cat(text, " online", sizeof(text));
+        dot = wss.members <= 1 || wss.online > 1 ? 0x4ade80 : COL_WARN;
+    }
+    if (wss.present && wss.active && wss.requests) {
+        str_copy(badge, fmt_u64(n, (uint64_t)wss.requests, 10), sizeof(badge));
+        str_cat(badge, wss.requests == 1 ? " request" : " requests", sizeof(badge));
+    }
+    if (!str_eq(text, wss_text) || !str_eq(badge, wss_badge) || dot != wss_dot) {
+        str_copy(wss_text, text, sizeof(wss_text));
+        str_copy(wss_badge, badge, sizeof(wss_badge));
+        wss_dot = dot;
+        damage(ws_area());
+    }
+}
+
+static void paint_ws_status(surface_t *v, int ox, int oy) {
+    rect_t p;
+    if (!wss_text[0]) return;
+    p = ws_rect();
+    draw_rrect(v, p.x + ox, p.y + oy, p.w, p.h, p.h / 2, RR_ALL, 0xffffff, hover_kind == HV_WS ? 36 : 18);
+    draw_circle(v, p.x + 14 + ox, p.y + p.h / 2 + oy, 4, wss_dot, 255);
+    draw_text_clip(v, p.x + 26 + ox, 7 + oy, wss_text, wss.active && !wss.busy[0] ? COL_TEXT : 0xc8d1dc,
+                   p.w - 40 - (wss_badge[0] ? text_width_f(wss_badge, FONT_BOLD) + 18 : 0));
+    if (wss_badge[0]) {
+        int bw = text_width_f(wss_badge, FONT_BOLD) + 14;
+        draw_rrect(v, p.x + p.w - bw - 4 + ox, p.y + 3 + oy, bw, p.h - 6, (p.h - 6) / 2, RR_ALL, COL_DANGER, 255);
+        draw_text_f(v, p.x + p.w - bw + 3 + ox, 7 + oy, wss_badge, 0xffffff, FONT_BOLD);
     }
 }
 
@@ -348,6 +475,7 @@ static void paint_panel(surface_t *v, int ox, int oy) {
         rect_t c = clock_rect();
         draw_text_f(v, c.x + c.w - text_width_f(clock_text, FONT_MONO) + ox, 7 + oy, clock_text, 0xb8c2cf, FONT_MONO);
     }
+    paint_ws_status(v, ox, oy);
     {
         rect_t p = power_rect();
         if (hover_kind == HV_POWER || power_open) draw_rrect(v, p.x + ox, p.y + oy, p.w, p.h, 6, RR_ALL, 0xffffff, 30);
@@ -756,6 +884,7 @@ static void set_hover(int kind, int idx) {
         else if (k == HV_POWER) damage(power_rect());
         else if ((k == HV_CLOSE || k == HV_MIN) && i >= 0 && wins[i].used) damage(frame_rect(&wins[i]));
         else if (k == HV_MENU) damage(menu_bounds(&power_menu, power_menu_x(), PANEL_H + 4));
+        else if (k == HV_WS) damage(ws_area());
     }
     hover_kind = kind;
     hover_idx = idx;
@@ -771,6 +900,10 @@ static void update_hover(void) {
     }
     if (rect_contains(power_rect(), mouse_x, mouse_y)) {
         set_hover(HV_POWER, 0);
+        return;
+    }
+    if (wss_text[0] && rect_contains(ws_rect(), mouse_x, mouse_y)) {
+        set_hover(HV_WS, 0);
         return;
     }
     for (int i = 0; i < ndock; i++) {
@@ -834,6 +967,10 @@ static void mouse_event(const sh_mouse_t *e) {
         }
         if (hover_kind == HV_DOCK && (pressed & UI_BTN_LEFT)) {
             dock_click(hover_idx);
+            return;
+        }
+        if (hover_kind == HV_WS && (pressed & UI_BTN_LEFT)) {
+            dock_click(2); /* the Workspace entry */
             return;
         }
         if (mouse_y < PANEL_H) return;
@@ -970,6 +1107,7 @@ int main(void) {
         while (sh_msg_recv(q, &stale, 0) == 0) {}
     }
     update_clock();
+    update_ws_status();
     damage(R(0, 0, screen.w, screen.h));
     flush_damage();
     print("wm: desktop ready\n");
@@ -983,6 +1121,7 @@ int main(void) {
             last_tick = sh_ticks();
             reap_dead_windows();
             update_clock();
+            update_ws_status();
         }
         flush_damage();
         if (!busy) sh_sleep(1);
