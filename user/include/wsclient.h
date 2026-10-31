@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-#define WS_MAX_FILE 8192
+#define WS_MAX_FILE 16384
 
 /* Send one command line, plus optional data (the contents for `put`), to
  * workspaced and copy its answer, NUL-terminated, into out.  Returns the

@@ -22,7 +22,7 @@
 enum { V_OVERVIEW, V_MEMBERS, V_FILES, V_REQUESTS, V_ACTIVITY };
 enum {
     A_NONE, A_NAV, A_CREATE, A_JOIN, A_INVITE, A_SYNC, A_ADD, A_ADD_OK, A_CANCEL, A_OPEN, A_SAVE,
-    A_REQUEST, A_GRANT, A_DENY, A_FOCUS, A_BACK
+    A_REQUEST, A_GRANT, A_DENY, A_FOCUS, A_BACK, A_EDIT
 };
 enum { F_CREATE, F_CODE, F_NAME, F_PATH, NFIELDS };
 
@@ -322,6 +322,14 @@ static void perform(int action, int arg) {
     case A_DENY: do_file_cmd("deny", reqs[arg].id, reqs[arg].rank); break;
     case A_FOCUS: focus_field = arg; break;
     case A_BACK: viewing = -1; break;
+    case A_EDIT: {
+        /* Code decrypts it into its own memory through workspaced. */
+        char a[48];
+        str_copy(a, "ws:", sizeof(a));
+        str_cat(a, files[arg].id, sizeof(a));
+        set_message(sh_spawn_args("/apps/code.app", a) < 0 ? "Could not start Code" : "Opening in Code...");
+        break;
+    }
     }
 }
 
@@ -538,6 +546,7 @@ static void draw_files(surface_t *s, int x, int y, int w, int h) {
         }
         draw_text_clip(s, x + 44, y + 23, meta, COL_MUTED, w - 360);
         if (f->open) {
+            button(s, x + w - 286, y + 8, 64, "Edit", 1, A_EDIT, i);
             button(s, x + w - 214, y + 8, 64, "Open", 0, A_OPEN, i);
             button(s, x + w - 142, y + 8, 130, "Save copy", 0, A_SAVE, i);
         } else {

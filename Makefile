@@ -66,7 +66,7 @@ USERPROGS_TEST := $(subst /sbin/init.app=$(B)/user/init.app,/sbin/init.app=$(B)/
 
 UAPPS := $(UPROGS:%=$(B)/user/%.app)
 
-.PHONY: all clean qemu qemu-headless qemu-smoke test
+.PHONY: all clean qemu qemu-headless qemu-smoke test editor-test
 all: shusha.iso
 
 $(B)/k/%.o: %.c
@@ -193,6 +193,13 @@ test:
 	$(CC) -O2 -Wall -Wextra -Werror -Icrypto -Itests -o $(B)/test/crypto_test \
 	      tests/crypto_test.c $(wildcard crypto/*.c)
 	$(B)/test/crypto_test
+
+# Host tests for the editor's Emmet expansion and language recognition.
+editor-test:
+	@mkdir -p $(B)/test
+	$(CC) -O2 -Wall -Wextra -Werror -Iuser/include -o $(B)/test/editor_test tests/emmet_test.c \
+	      user/apps/code_emmet.c user/apps/code_lang.c user/lib/lib.c
+	$(B)/test/editor_test
 
 clean:
 	rm -rf $(B) shusha.iso lan.iso

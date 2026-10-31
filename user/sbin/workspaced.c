@@ -45,7 +45,7 @@
 #define MAXREQ      16
 #define ENTRY_BODY  200
 #define ENTRY_SIZE  (4 + 1 + ENTRY_BODY + 32 + 64)
-#define MAX_CONTENT 8192
+#define MAX_CONTENT 16384
 #define MAX_OBJECT  (MAX_CONTENT + 8 * (2 + SC_WRAP_BOX) + 512)
 #define CHUNK       1200
 
@@ -377,6 +377,13 @@ static int rank_key(uint8_t out32[32], int target) {
 static void handle_peer(chan_msg_t *m);
 static int decrypt_name(char name[65], const uint8_t *o, const uint8_t fk[32]);
 
+static int mem_cmp32(const uint8_t *a, const uint8_t *b) {
+    for (int i = 0; i < 32; i++) {
+        if (a[i] != b[i]) return a[i] < b[i] ? -1 : 1;
+    }
+    return 0;
+}
+
 static chan_msg_t rx;
 
 /* Send req and wait for a reply of type `want` on the same channel,
@@ -466,7 +473,7 @@ static void heartbeat(void) {
 
 /* ---- files ------------------------------------------------------------- *
  * Object layout:
- *   "SWF1" | file_id16 | owner_rank1 | signer_rank1 | size4
+ *   "SWF2" | file_id16 | owner_rank1 | signer_rank1 | size4 | version4
  *   | name: nonce24 ct64 tag16 | content: nonce24 ct(size) tag16
  *   | nbox1 | boxes: kind1 rank1 (SC_WRAP_BOX | 72 bytes) ...
  *   | sig64 (Ed25519 by the signer over SHA-256 of everything before)  */
@@ -479,7 +486,9 @@ static uint8_t plain[MAX_CONTENT + 1];
 #define OFF_OWNER  20
 #define OFF_SIGNER 21
 #define OFF_SIZE   22
-#define OFF_NAME   26
+#define OFF_VER    26  /* bumped by every edit or grant; older never replaces newer */
+#define OFF_NAME   30
+#define OBJ_MAGIC  0x32465753u /* "SWF2" */
 #define OFF_BODY   (OFF_NAME + 24 + 64 + 16)
 
 static uint64_t box_len(uint8_t kind) {
@@ -523,7 +532,7 @@ static long verify_object(const uint8_t *o, uint64_t avail) {
     uint8_t h[32];
     uint64_t len;
     member_t *owner, *signer;
-    if (avail < OFF_BODY + 40 + 1 + 64 || sc_load32_le(o) != 0x31465753u) return -1;
+    if (avail < OFF_BODY + 40 + 1 + 64 || sc_load32_le(o) != OBJ_MAGIC) return -1;
     if (sc_load32_le(o + OFF_SIZE) > MAX_CONTENT) return -1;
     len = object_len(o);
     if (len > avail || len > MAX_OBJECT) return -1;
@@ -848,19 +857,35 @@ static void handle_peer(chan_msg_t *msg) {
         if (off + n == rx_total) {
             long len = verify_object(rxbuf, rx_total);
             if (len > 0 && mem_eq_ct(rxbuf + OFF_ID, rx_id, 16)) {
-                uint8_t fk[32];
+                uint8_t fk[32], h_old[32], h_new[32];
                 char name[65];
-                int had = load_object(obj2, rx_id) > 0, had_key = had && file_key(fk, obj2) == 0;
+                long old_len = load_object(obj2, rx_id);
+                int had = old_len > 0, had_key = had && file_key(fk, obj2) == 0;
                 int now_key = file_key(fk, rxbuf) == 0 && decrypt_name(name, rxbuf, fk) == 0;
-                member_t *owner = member_by_rank(rxbuf[OFF_OWNER]);
+                uint32_t v_old = had ? sc_load32_le(obj2 + OFF_VER) : 0, v_new = sc_load32_le(rxbuf + OFF_VER);
+                member_t *owner = member_by_rank(rxbuf[OFF_OWNER]), *signer = member_by_rank(rxbuf[OFF_SIGNER]);
+                int edited = had && (sc_load32_le(obj2 + OFF_SIZE) != sc_load32_le(rxbuf + OFF_SIZE) ||
+                                     !mem_eq_ct(obj2 + OFF_BODY, rxbuf + OFF_BODY, 24));
                 mem_wipe(fk, 32);
+                r[0] = M_ACK;
+                /* Never go back to an older version.  Two edits of the same
+                 * version: every machine keeps the one with the larger hash,
+                 * so all copies end up the same. */
+                if (had) {
+                    sc_sha256(obj2, (uint64_t)old_len, h_old);
+                    sc_sha256(rxbuf, (uint64_t)len, h_new);
+                }
+                if (had && (v_new < v_old || (v_new == v_old && !(mem_cmp32(h_new, h_old) > 0)))) {
+                    reply(ch, r, 1);
+                    break;
+                }
                 store_object(rxbuf, (uint64_t)len);
                 files_dirty = 1;
-                r[0] = M_ACK;
                 reply(ch, r, 1);
                 if (!had) event(owner ? owner->name : "someone", now_key ? " shared " : " shared a locked file",
                                 now_key ? name : 0);
                 else if (!had_key && now_key) event("You can now open ", name, 0);
+                else if (edited && now_key) event(signer ? signer->name : "someone", " edited ", name);
                 else write_status();
             } else {
                 log_line("dropped a file object with a bad signature");
@@ -1264,7 +1289,7 @@ static void cmd_put(const char *base) {
         return;
     }
     if (!req_payload || size > MAX_CONTENT) {
-        say(req_payload ? "file too large (8 KB limit for now)\n" : "nothing to share\n");
+        say(req_payload ? "file too large (16 KB limit for now)\n" : "nothing to share\n");
         return;
     }
     for (const char *c = base; *c; c++) {
@@ -1277,10 +1302,11 @@ static void cmd_put(const char *base) {
     mem_set(name, 0, sizeof(name));
     str_copy(name, base, sizeof(name));
     rand_bytes(fk, 32);
-    sc_store32_le(obj, 0x31465753u);
+    sc_store32_le(obj, OBJ_MAGIC);
     rand_bytes(obj + OFF_ID, 16);
     obj[OFF_OWNER] = (uint8_t)st.my_rank;
     sc_store32_le(obj + OFF_SIZE, (uint32_t)size);
+    sc_store32_le(obj + OFF_VER, 1);
     rand_bytes(obj + OFF_NAME, 24);
     sc_xaead_seal(obj + OFF_NAME + 24, obj + OFF_NAME + 88, (uint8_t *)name, 64, obj + OFF_ID, 16, obj + OFF_NAME, fk);
     rand_bytes(obj + OFF_BODY, 24);
@@ -1494,6 +1520,7 @@ static void cmd_grant(const char *name, int rank) {
     file_purpose(purpose, obj + OFF_ID);
     add_member_box(obj, &p, m, fk, purpose);
     obj[boxes_off(obj)]++;
+    sc_store32_le(obj + OFF_VER, sc_load32_le(obj + OFF_VER) + 1);
     sign_object(obj, p);
     store_object(obj, p + 64);
     for (int i = 0; i < st.nreq; i++) {
@@ -1536,6 +1563,59 @@ static void cmd_sync(void) {
     say("synced with ");
     say_u((uint64_t)done);
     say(" member(s)\n");
+}
+
+/* Save new contents of a shared file.  The owner and anyone ranked above
+ * may edit (lower ranks with a grant can read only); the file keeps its
+ * key, name and access boxes, gets a fresh nonce and the next version,
+ * and is signed by the editor. */
+static void cmd_update(const char *target) {
+    uint8_t fk[32];
+    char name[65];
+    int have;
+    uint32_t size = (uint32_t)req_payload_len;
+    uint64_t b_old, b_len, p;
+    if (!st.active) {
+        say("no workspace\n");
+        return;
+    }
+    if (!req_payload || size > MAX_CONTENT) {
+        say(req_payload ? "file too large (16 KB limit for now)\n" : "nothing to save\n");
+        return;
+    }
+    if (find_file(target, fk, &have) != 0 || !have) {
+        say("you cannot open that file\n");
+        return;
+    }
+    if (st.my_rank > obj[OFF_OWNER]) {
+        mem_wipe(fk, 32);
+        say("read-only: only its owner or a higher rank can edit it\n");
+        return;
+    }
+    b_old = boxes_off(obj);
+    b_len = object_len(obj) - 64 - b_old;
+    mem_copy(obj2, obj, OFF_BODY);
+    sc_store32_le(obj2 + OFF_SIZE, size);
+    sc_store32_le(obj2 + OFF_VER, sc_load32_le(obj + OFF_VER) + 1);
+    rand_bytes(obj2 + OFF_BODY, 24);
+    sc_xaead_seal(obj2 + OFF_BODY + 24, obj2 + OFF_BODY + 24 + size, req_payload, size, obj2 + OFF_ID, 16,
+                  obj2 + OFF_BODY, fk);
+    p = boxes_off(obj2);
+    mem_copy(obj2 + p, obj + b_old, b_len);
+    p += b_len;
+    sign_object(obj2, p);
+    if (decrypt_name(name, obj2, fk) != 0) str_copy(name, "file", sizeof(name));
+    mem_wipe(fk, 32);
+    mem_copy(obj, obj2, p + 64);
+    store_object(obj, p + 64);
+    files_dirty = 1;
+    say("saved ");
+    say(name);
+    say(" (version ");
+    say_u(sc_load32_le(obj + OFF_VER));
+    say(", encrypted)\n");
+    event("You saved ", name, 0);
+    replicate(obj, p + 64);
 }
 
 static void cmd_deny(const char *name, int rank) {
@@ -1680,6 +1760,7 @@ static void run_command(char *line) {
     else if (str_eq(argv[0], "files")) cmd_files();
     else if (str_eq(argv[0], "cat") && argc > 1) cmd_cat(argv[1], 0);
     else if (str_eq(argv[0], "raw") && argc > 1) cmd_cat(argv[1], 1);
+    else if (str_eq(argv[0], "update") && argc > 1) cmd_update(argv[1]);
     else if (str_eq(argv[0], "deny") && argc > 2) cmd_deny(argv[1], (int)(argv[2][0] - '0'));
     else if (str_eq(argv[0], "request") && argc > 1) cmd_request(argv[1]);
     else if (str_eq(argv[0], "requests")) cmd_requests();

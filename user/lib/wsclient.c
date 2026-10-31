@@ -94,9 +94,21 @@ long ws_run(const char *cmdline, char *out, uint64_t cap) {
         if (sh_stat(argv[1], &st) != 0 || st.type == SH_NODE_DIR) return fail(out, cap, "ws: no such file\n");
         n = sh_read_at(argv[1], 0, data, sizeof(data));
         if (n < 0) return fail(out, cap, "ws: you cannot read that file\n");
-        if (n > WS_MAX_FILE) return fail(out, cap, "ws: file too large (8 KB limit for now)\n");
+        if (n > WS_MAX_FILE) return fail(out, cap, "ws: file too large (16 KB limit for now)\n");
         str_copy(cmd, "put ", sizeof(cmd));
         str_cat(cmd, base_name(argv[1]), sizeof(cmd));
+        n = ws_request(cmd, data, (uint64_t)n, out, cap, 0);
+        mem_wipe(data, sizeof(data));
+        return n;
+    }
+    if (argc == 3 && str_eq(argv[0], "update")) {
+        /* new contents for a shared file, read here with the user's rights */
+        char cmd[96];
+        n = sh_read_at(argv[2], 0, data, sizeof(data));
+        if (n < 0) return fail(out, cap, "ws: you cannot read that file\n");
+        if (n > WS_MAX_FILE) return fail(out, cap, "ws: file too large (16 KB limit for now)\n");
+        str_copy(cmd, "update ", sizeof(cmd));
+        str_cat(cmd, argv[1], sizeof(cmd));
         n = ws_request(cmd, data, (uint64_t)n, out, cap, 0);
         mem_wipe(data, sizeof(data));
         return n;
