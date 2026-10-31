@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""GUI demo on three QEMU machines: accounts, the Workspace and Code.
+"""GUI demo on three QEMU machines: accounts, the Workspace and Qələm.
 
     make SERIAL_MIRROR=1 shusha.iso && python3 scripts/ws-gui-demo.py [outdir]
 
 Boots three desktops on one virtual LAN and drives them with the mouse
 and keyboard: first-boot account setup and sign-in, an administrator
 adding a local user, creating and joining the workspace, writing HTML
-with Emmet in Code and saving it as an encrypted workspace file, an edit
+with Emmet in Qələm (the editor) and saving it as an encrypted workspace file, an edit
 by a higher rank arriving live, a locked file, request and grant, a
-read-only editor, CSS/Python editing, the command palette, the lock
+read-only editor, CSS/Python editing with the outline, the finder, the lock
 screen, and another local user who sees nothing of the workspace.  A
 screenshot is saved after each step (docs/poc/README.md); vm3's traffic
 goes to build/lan/vm3.pcap for scripts/wire-check.py.  Progress and the
@@ -81,8 +81,8 @@ os.makedirs(OUT, exist_ok=True)
 
 # Screen geometry on the 1280x800 desktop (see wm.c): windows open at
 # content (24 + 36n, 85 + 30n) for the n-th window of a session, moved up
-# to y=75 if they would reach the dock; Code is wide and sits at x=88.
-DOCK = {"explorer": (550, 754), "terminal": (610, 754), "workspace": (670, 754), "code": (730, 754)}
+# to y=75 if they would reach the dock; Qələm is wide and sits at x=88.
+DOCK = {"explorer": (550, 754), "terminal": (610, 754), "workspace": (670, 754), "qalam": (730, 754)}
 MENU = {"accounts": (1200, 52), "lock": (1200, 78), "logout": (1200, 104)}
 POWER = (1256, 15)
 GREETER = (410, 166)            # login window content origin
@@ -189,8 +189,8 @@ with Lan(3, iso=os.environ.get("SHUSHA_GUI_ISO", os.path.join(ROOT, "shusha.iso"
     time.sleep(4)
     shot(2, "05-alice-joined-from-the-app")
 
-    # ---- Code: Emmet, then save as an encrypted workspace file ----------------
-    click(2, DOCK["code"], 3.0)
+    # ---- Qələm: Emmet, then save as an encrypted workspace file ----------------
+    click(2, DOCK["qalam"], 3.0)
     key(2, "ctrl-n", 1, 0.6)
     key(2, "f1", 1, 0.6)
     typ(2, "language\n")
@@ -198,7 +198,7 @@ with Lan(3, iso=os.environ.get("SHUSHA_GUI_ISO", os.path.join(ROOT, "shusha.iso"
     typ(2, "!")
     key(2, "tab", 1, 0.8)
     typ(2, "main.page>h1{Shusha Workspace}+ul>li.item$*3", 1.0)
-    shot(2, "06-code-emmet-suggestion")
+    shot(2, "06-qalam-emmet-suggestion")
     key(2, "tab", 1, 1.0)
     key(2, "f1", 1, 0.6)
     typ(2, "encrypted\n")
@@ -210,7 +210,7 @@ with Lan(3, iso=os.environ.get("SHUSHA_GUI_ISO", os.path.join(ROOT, "shusha.iso"
     shot(2, "07-saved-as-encrypted-workspace-file")
 
     # ---- the admin edits it; Alice sees it arrive -----------------------------------
-    click(1, DOCK["code"], 3.0)
+    click(1, DOCK["qalam"], 3.0)
     key(1, "ctrl-p", 1, 0.8)
     typ(1, "index\n", 1.5)
     key(1, "ctrl-end", 1, 0.3)
@@ -225,7 +225,7 @@ with Lan(3, iso=os.environ.get("SHUSHA_GUI_ISO", os.path.join(ROOT, "shusha.iso"
     shot(2, "09-alice-sees-the-edit-arrive")
 
     # ---- Bob: locked, request, grant, read-only --------------------------------------
-    click(3, DOCK["code"], 3.0)
+    click(3, DOCK["qalam"], 3.0)
     shot(3, "10-bob-sees-a-locked-file")
     click(3, DOCK["workspace"], 2.0)
     wb = origin(1, 580)
@@ -240,13 +240,13 @@ with Lan(3, iso=os.environ.get("SHUSHA_GUI_ISO", os.path.join(ROOT, "shusha.iso"
     m = len(lan.log(3))
     click(2, in_app(wa, (708, 144)), 2.0)
     wait(3, "workspaced: You can now open index.html", m)
-    click(3, DOCK["code"], 1.5)
+    click(3, DOCK["qalam"], 1.5)
     key(3, "ctrl-p", 1, 0.8)
     typ(3, "index\n", 2.0)
     shot(3, "11-bob-read-only-after-grant")
 
-    # ---- more languages: CSS with Emmet, Python, the palette ----------------------
-    click(2, DOCK["code"], 1.5)
+    # ---- more languages: CSS with Emmet, Python, the finder -----------------------
+    click(2, DOCK["qalam"], 1.5)
     key(2, "ctrl-n", 1, 0.6)
     key(2, "f1", 1, 0.6)
     typ(2, "language\n")
@@ -266,10 +266,10 @@ with Lan(3, iso=os.environ.get("SHUSHA_GUI_ISO", os.path.join(ROOT, "shusha.iso"
     key(2, "backspace", 1, 0.2)
     typ(2, "\nfor user in os.listdir(\"/home\"):\n", 0.3)
     typ(2, "print(gr", 1.0)
-    shot(2, "13-python-and-suggestions")
+    shot(2, "13-python-outline-and-suggestions")
     key(2, "f1", 1, 0.6)
     typ(2, "line", 0.8)
-    shot(2, "14-command-palette")
+    shot(2, "14-finder")
     key(2, "esc", 1, 0.5)
 
     # ---- lock screen, then another local user -----------------------------------------

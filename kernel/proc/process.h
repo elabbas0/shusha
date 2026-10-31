@@ -103,6 +103,9 @@ typedef struct thread {
     uint64_t         user_entry_stack_top;
     uint64_t         block_reason;
     uint64_t         wake_tick;
+    /* Shusha: dead and taken out of the run ring; its stacks and its
+     * process's memory are already back with the allocator. */
+    uint64_t         detached;
 } thread_t;
 
 #endif

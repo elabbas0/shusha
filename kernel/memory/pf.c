@@ -218,7 +218,7 @@ static void page_fault_handler(struct registers *regs) {
 
         // map the page into the current address space as user read-write
         uint64_t page_va = cr2 & ~0xFFFULL;
-        int ok = vmm_map_page(active_as(), page_va, phys, VMM_FLAGS_USER_RW);
+        int ok = vmm_map_page(active_as(), page_va, phys, VMM_FLAGS_USER_RW | VMM_OWNED);
         if (ok != 0) {
             pmm_free(phys);
             fb_print("\n*** PAGE FAULT: vmm_map_page failed ***\n", FB_WHITE, FB_RED);

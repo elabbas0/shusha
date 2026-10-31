@@ -7,6 +7,12 @@ IPC access control, added without new call numbers:
   `(48-bit random tag << 16) | slot`, instead of a bare slot number.
   `SYS_SHM_MAP/UNMAP/CLOSE` refuse handles whose tag does not match, so a
   process can only map a region whose handle it was given.
+- Shared memory lifetime: mapping a region twice in one process counts
+  once. `SYS_SHM_UNMAP` fails unless the caller has it mapped.
+  `SYS_SHM_CLOSE` marks the region closed. Its pages are freed only once it
+  is closed and no address space maps it; a dead process's mappings are
+  dropped when its memory is reclaimed. (ICDA freed the pages when one
+  counter of maps plus closes reached 0, even while still mapped.)
 - `SYS_MSG_RECV` (`rdi` handle, `rsi` buffer, `rdx` flags): bit 0 is the
   old "block" argument; bit 1 makes a successful call return the
   sender's pid (stamped by the kernel at send time) instead of 0; bit 2
@@ -52,5 +58,7 @@ Userspace networking (Shusha, no new numbers):
   `[src ip 4][src port u16][dst port u16][len u16][pad u16]`, or 0.
   Ports are owned by the binding process and freed when it exits.
 - `/dev/netinfo` reads as text: `ip`, `mask`, `mac`.
+- `/dev/meminfo` reads as text: `free <frames>` and `total <frames>`,
+  in 4 KiB frames (`scripts/reclaim-test.py` uses it).
 - Without a DHCP server the kernel takes a link-local address,
   169.254.<mac[4]>.<mac[5]>/16.

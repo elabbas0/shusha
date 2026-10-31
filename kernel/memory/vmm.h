@@ -76,6 +76,11 @@ typedef struct {
 // common flag combinations
 #define VMM_FLAGS_KERNEL_RW  (VMM_PRESENT | VMM_WRITE | VMM_GLOBAL)
 #define VMM_FLAGS_KERNEL_RO  (VMM_PRESENT | VMM_GLOBAL)
+/* Software bit (ignored by the CPU): the frame belongs to this address
+ * space and is freed with it.  Shared memory and the framebuffer are
+ * mapped without it. */
+#define PTE_OWNED  (1ULL << 9)
+#define VMM_OWNED  PTE_OWNED
 #define VMM_FLAGS_USER_RW    (VMM_PRESENT | VMM_WRITE | VMM_USER)
 #define VMM_FLAGS_USER_RO    (VMM_PRESENT | VMM_USER)
 

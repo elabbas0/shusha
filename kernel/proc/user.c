@@ -224,7 +224,7 @@ int user_prepare_address_space(process_t *proc) {
 
         if (vmm_map_page(proc->addr_space,
                          USER_STACK_TOP - (uint64_t)PAGE_SIZE_4K * (i + 1),
-                         stack_page, VMM_FLAGS_USER_RW) != 0) {
+                         stack_page, VMM_FLAGS_USER_RW | VMM_OWNED) != 0) {
             pmm_free(stack_page);
             return -1;
         }
@@ -254,7 +254,7 @@ int user_map_blob(process_t *proc, const void *blob, uint64_t size, uint64_t vir
             chunk = PAGE_SIZE_4K;
         }
         // ICX blobs need writable pages for .data/.bss sections
-        if (vmm_map_page(proc->addr_space, virt_base + i * PAGE_SIZE_4K, phys, VMM_FLAGS_USER_RW) != 0) {
+        if (vmm_map_page(proc->addr_space, virt_base + i * PAGE_SIZE_4K, phys, VMM_FLAGS_USER_RW | VMM_OWNED) != 0) {
             pmm_free(phys);
             return -1;
         }
@@ -289,7 +289,7 @@ static int user_map_segment(process_t *proc, const char *image, uint64_t image_s
 
     page_base = virt & ~(PAGE_SIZE_4K - 1);
     seg_end = (virt + mem_size + PAGE_SIZE_4K - 1) & ~(PAGE_SIZE_4K - 1);
-    map_flags = (seg_flags & PF_W) ? VMM_FLAGS_USER_RW : VMM_FLAGS_USER_RO;
+    map_flags = ((seg_flags & PF_W) ? VMM_FLAGS_USER_RW : VMM_FLAGS_USER_RO) | VMM_OWNED;
 
     for (uint64_t page = page_base; page < seg_end; page += PAGE_SIZE_4K) {
         uint64_t phys = pmm_alloc();

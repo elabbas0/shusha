@@ -1017,7 +1017,7 @@ static void copy_sel(tab_t *t, int cut) {
         clip_line = 0;
         if (cut) replace(t, a, b - a, "", 0, a);
     } else {
-        /* no selection: the whole line, like VS Code */
+        /* no selection: the whole line */
         int l = line_of(t->cur), s = ls[l], e = l + 1 < nlines ? ls[l + 1] : t->len;
         clip_len = e - s;
         mem_copy(clip, t->buf + s, (uint64_t)clip_len);
@@ -1555,7 +1555,7 @@ static void draw_library(surface_t *s) {
         draw_circle(s, 20, y + 8, 5, 0xb44fd8, 255);
         draw_text_f(s, 32, y, "Workspace", C_TEXT, FONT_BOLD);
         str_copy(sub, ws_name, sizeof(sub));
-        str_cat(sub, my_rank == 0 ? "  -  you are admin" : "  -  your rank ", sizeof(sub));
+        str_cat(sub, my_rank == 0 ? " \xc2\xb7 admin" : " \xc2\xb7 rank ", sizeof(sub));
         if (my_rank) str_cat(sub, fmt_u64(n, (uint64_t)my_rank, 10), sizeof(sub));
         draw_text_clip(s, 32, y + 19, sub, C_LILAC, LIB_W - 70);
         {
@@ -1745,7 +1745,7 @@ static void draw_card_head(surface_t *s, tab_t *t) {
         ghost_button(s, bx, y0 + 6, 60, "Save", t->dirty, A_CARD_SAVE);
     }
     bx -= 92;
-    ghost_button(s, bx, y0 + 6, 80, outline_shown() ? "Outline -" : "Outline +", 0, A_CARD_OUTLINE);
+    ghost_button(s, bx, y0 + 6, 80, "Outline", outline_shown(), A_CARD_OUTLINE);
     bx -= 64;
     ghost_button(s, bx, y0 + 6, 56, "Find", find_open != 0, A_CARD_FIND);
 }

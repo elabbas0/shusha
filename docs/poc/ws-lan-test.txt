@@ -7,42 +7,42 @@
   ok    vm1 creates the workspace as admin
   vm1$ ws invite
         invite code (single use):
-        shuvh7aaan4dm7xt5qi72ib6j6a6bsdiqvcdqx2fwkzyohizjwx
+        shuvh7aaan4dpq4ztml2yr2vlyhzfo6cwdarkbj5cbxqvzao7yi
   ok    invite code for vm2
   vm1$ ws invite
         invite code (single use):
-        shuvh7aaan4dm7xt5qi72ib6j46p3tmfbo2ealixt2kxlxfq3qm
+        shuvh7aaan4dpq4ztml2yr2vlzjz3hmzkv4f22zvdzofsv56cid
   ok    invite code for vm3
   vm1$ ws invite
         invite code (single use):
-        shuvh7aaan4dm7xt5qi72ib6j3hl3zarpll6rgxevgrpzjv7dql
+        shuvh7aaan4dpq4ztml2yr2vl2arhcwdksuzjkunqbth6ubkwd2
   ok    invite code for vm4
   vm1$ ws invite
         invite code (single use):
-        shuvh7aaan4dm7xt5qi72ib6j6vrn4dwbcgsrezglqlxdrngmq5
+        shuvh7aaan4dpq4ztml2yr2vl2y7krstejp7txsy2fdn6ku6agt
   ok    invite code for vm5
-  vm2$ ws join shuvh7aaan4dm7xt5qi72ib6j6a6bsdiqvcdqx2fwkzyoaizjwx mallory
+  vm2$ ws join shuvh7aaan4dpq4ztml2yr2vlyhzfo6cwdarkbj5cbxqvaao7yi mallory
         the admin refused the join (invite invalid or already used)
   ok    forged invite is refused
-  vm2$ ws join shuvh7aaan4dm7xt5qi72ib6j6a6bsdiqvcdqx2fwkzyohizjwx user2
+  vm2$ ws join shuvh7aaan4dpq4ztml2yr2vlyhzfo6cwdarkbj5cbxqvzao7yi user2
         workspaced: admin is online
         workspaced: Joined workspace shusha-team
         joined workspace shusha-team as rank 1
   ok    vm2 joins as rank 1
-  vm3$ ws join shuvh7aaan4dm7xt5qi72ib6j6a6bsdiqvcdqx2fwkzyohizjwx reuse
+  vm3$ ws join shuvh7aaan4dpq4ztml2yr2vlyhzfo6cwdarkbj5cbxqvzao7yi reuse
         the admin refused the join (invite invalid or already used)
   ok    vm2's used invite is refused for vm3
-  vm3$ ws join shuvh7aaan4dm7xt5qi72ib6j46p3tmfbo2ealixt2kxlxfq3qm user3
+  vm3$ ws join shuvh7aaan4dpq4ztml2yr2vlzjz3hmzkv4f22zvdzofsv56cid user3
         workspaced: admin is online
         workspaced: Joined workspace shusha-team
         joined workspace shusha-team as rank 2
   ok    vm3 joins as rank 2
-  vm4$ ws join shuvh7aaan4dm7xt5qi72ib6j3hl3zarpll6rgxevgrpzjv7dql user4
+  vm4$ ws join shuvh7aaan4dpq4ztml2yr2vl2arhcwdksuzjkunqbth6ubkwd2 user4
         workspaced: admin is online
         workspaced: Joined workspace shusha-team
         joined workspace shusha-team as rank 3
   ok    vm4 joins as rank 3
-  vm5$ ws join shuvh7aaan4dm7xt5qi72ib6j6vrn4dwbcgsrezglqlxdrngmq5 user5
+  vm5$ ws join shuvh7aaan4dpq4ztml2yr2vl2y7krstejp7txsy2fdn6ku6agt user5
         workspaced: admin is online
         workspaced: Joined workspace shusha-team
         joined workspace shusha-team as rank 4
@@ -50,39 +50,39 @@
 
 [members agree on the signed log]
   vm1$ ws members
-          rank 0  admin  169.254.0.1  key d496607dba65  (you)
-          rank 1  user2  169.254.0.2  key b558b692e8f4
-          rank 2  user3  169.254.0.3  key 0c64acaa49fe
-          rank 3  user4  169.254.0.4  key c6c6e64f0b1e
-          rank 4  user5  169.254.0.5  key 2558ed4f900d
+          rank 0  admin  169.254.0.1  key 73259d623b5c  (you)
+          rank 1  user2  169.254.0.2  key f7ef985061d2
+          rank 2  user3  169.254.0.3  key f2e4d92430f1
+          rank 3  user4  169.254.0.4  key c7405d53af29
+          rank 4  user5  169.254.0.5  key 8e850a614ed6
   ok    vm1 sees ranks 0-4
   vm2$ ws members
-          rank 0  admin  169.254.0.1  key d496607dba65
-          rank 1  user2  169.254.0.2  key b558b692e8f4  (you)
-          rank 2  user3  169.254.0.3  key 0c64acaa49fe
-          rank 3  user4  169.254.0.4  key c6c6e64f0b1e
-          rank 4  user5  169.254.0.5  key 2558ed4f900d
+          rank 0  admin  169.254.0.1  key 73259d623b5c
+          rank 1  user2  169.254.0.2  key f7ef985061d2  (you)
+          rank 2  user3  169.254.0.3  key f2e4d92430f1
+          rank 3  user4  169.254.0.4  key c7405d53af29
+          rank 4  user5  169.254.0.5  key 8e850a614ed6
   ok    vm2 sees ranks 0-4
   vm3$ ws members
-          rank 0  admin  169.254.0.1  key d496607dba65
-          rank 1  user2  169.254.0.2  key b558b692e8f4
-          rank 2  user3  169.254.0.3  key 0c64acaa49fe  (you)
-          rank 3  user4  169.254.0.4  key c6c6e64f0b1e
-          rank 4  user5  169.254.0.5  key 2558ed4f900d
+          rank 0  admin  169.254.0.1  key 73259d623b5c
+          rank 1  user2  169.254.0.2  key f7ef985061d2
+          rank 2  user3  169.254.0.3  key f2e4d92430f1  (you)
+          rank 3  user4  169.254.0.4  key c7405d53af29
+          rank 4  user5  169.254.0.5  key 8e850a614ed6
   ok    vm3 sees ranks 0-4
   vm4$ ws members
-          rank 0  admin  169.254.0.1  key d496607dba65
-          rank 1  user2  169.254.0.2  key b558b692e8f4
-          rank 2  user3  169.254.0.3  key 0c64acaa49fe
-          rank 3  user4  169.254.0.4  key c6c6e64f0b1e  (you)
-          rank 4  user5  169.254.0.5  key 2558ed4f900d
+          rank 0  admin  169.254.0.1  key 73259d623b5c
+          rank 1  user2  169.254.0.2  key f7ef985061d2
+          rank 2  user3  169.254.0.3  key f2e4d92430f1
+          rank 3  user4  169.254.0.4  key c7405d53af29  (you)
+          rank 4  user5  169.254.0.5  key 8e850a614ed6
   ok    vm4 sees ranks 0-4
   vm5$ ws members
-          rank 0  admin  169.254.0.1  key d496607dba65
-          rank 1  user2  169.254.0.2  key b558b692e8f4
-          rank 2  user3  169.254.0.3  key 0c64acaa49fe
-          rank 3  user4  169.254.0.4  key c6c6e64f0b1e
-          rank 4  user5  169.254.0.5  key 2558ed4f900d  (you)
+          rank 0  admin  169.254.0.1  key 73259d623b5c
+          rank 1  user2  169.254.0.2  key f7ef985061d2
+          rank 2  user3  169.254.0.3  key f2e4d92430f1
+          rank 3  user4  169.254.0.4  key c7405d53af29
+          rank 4  user5  169.254.0.5  key 8e850a614ed6  (you)
   ok    vm5 sees ranks 0-4
 
 [rank-based file access]
@@ -127,10 +127,34 @@
           (locked file)  owner rank 2  [no access - ws request]
   ok    rank 4 is still locked out
 
+[editing]
+  vm3$ ws update plan.txt /home/plan-v2.txt
+        workspaced: You saved plan.txt
+        saved plan.txt (version 3, encrypted)
+        replicated to 4 of 4 member(s)
+  ok    the owner (rank 2) edits its file: version 3
+  vm2$ ws cat plan.txt
+        rank-two-plan-v2
+  ok    rank 1 sees the edit
+  vm4$ ws cat plan.txt
+        rank-two-plan-v2
+  ok    rank 3 (granted) sees the edit
+  vm4$ ws update plan.txt /home/hack.txt
+        read-only: only its owner or a higher rank can edit it
+  ok    rank 3 can read but not edit a rank-2 file
+  vm1$ ws update plan.txt /home/admin-edit.txt
+        workspaced: You saved plan.txt
+        saved plan.txt (version 4, encrypted)
+        replicated to 4 of 4 member(s)
+  ok    the admin may edit a lower rank's file
+  vm3$ ws cat plan.txt
+        edited-by-admin
+  ok    the owner gets the admin's edit
+
 [admin offline]
   vm1 (admin) powered off
   vm2$ ws cat plan.txt
-        rank-two-plan
+        edited-by-admin
   ok    rank 1 still reads the replica
   vm5$ ws put /home/notes.txt
         workspaced: You shared notes.txt

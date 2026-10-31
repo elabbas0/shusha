@@ -75,6 +75,7 @@ int dev_is_random(struct vfs_node *node);
 /* /dev/udp (userspace UDP, see kernel/net/udp.h) and /dev/netinfo. */
 int dev_is_udp(struct vfs_node *node);
 int dev_is_netinfo(struct vfs_node *node);
+int dev_is_meminfo(struct vfs_node *node);
 
 /* Identity/permission control files (writes handled by sys_vfs_write):
  *   /dev/setuid  "<uid>"          drop to uid (root may pick any uid)

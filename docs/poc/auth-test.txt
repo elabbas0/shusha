@@ -1,0 +1,49 @@
+[kernel gates]
+    ok    drops to uid 1000
+    ok    cannot kill a root process
+    ok    cannot suspend a root process
+    ok    cannot mount a volume
+    ok    cannot format a disk
+    ok    cannot install the system
+    ok    cannot take over the display
+    ok    cannot end a session (even its own)
+    ok    cannot read the account database
+    ok    cannot read the machine password key
+    ok    cannot become root again
+  ok    an ordinary user is refused every privileged call
+
+[first account]
+  ok    setup creates the administrator and shows a recovery key
+  ok    admin is uid 1000, an administrator, home /home/admin
+  ok    the home is private (0700) and theirs
+  ok    the database holds no plaintext password
+
+[wrong passwords lock the account]
+  ok    wrong password 1 refused
+  ok    wrong password 2 refused
+  ok    wrong password 3 refused
+  ok    after 3 failures even the right password waits
+  ok    after the lockout the right password works
+
+[recovery key]
+  ok    the recovery key sets a new password and is replaced by a new key
+  ok    the used recovery key no longer works
+
+[text login as the administrator]
+  ok    admin signs in on the console
+  ok    the shell runs as uid 1000, not root
+  ok    adding an account needs the admin's own password
+  ok    with it, bob is added as uid 1001
+  ok    admin cannot list bob's private home
+  ok    admin (not root) cannot read the account database
+  ok    programs started by admin are not root
+  ok    exit signs out
+
+[the second user]
+  ok    bob signs in
+  ok    bob's shell is uid 1001
+  ok    bob cannot list admin's home
+  ok    bob is not an administrator
+  ok    the old password no longer signs in
+
+PASS: 0 failure(s)

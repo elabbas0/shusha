@@ -2,6 +2,7 @@
 #define IPC_SHM_H
 
 #include <stdint.h>
+#include "../memory/vmm.h"
 
 /* Virtual address base for SHM mappings in userspace (each slot 16 MiB).
  * Must live in per-process PML4 space: 0x300000000 sat in PML4[0], which is
@@ -22,8 +23,13 @@ uint64_t shm_map(uint64_t handle);
 /* Unmap handle from current process */
 int shm_unmap(uint64_t handle);
 
-/* Release handle; frees physical pages when ref_count reaches 0 */
+/* Release handle.  The pages are freed once the region is closed and no
+ * address space maps it (a dying client may still be drawing into it). */
 int shm_close(uint64_t handle);
+
+/* Drop every mapping `as` holds (its process is dead and the address
+ * space is about to be destroyed). */
+void shm_release_address_space(addr_space_t *as);
 
 /* Get byte size of region */
 uint64_t shm_size(uint64_t handle);

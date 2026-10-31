@@ -1,38 +1,38 @@
 capture: build/lan/vm3.pcap
-secure-channel packets on UDP 7100: 977, between 6 address pairs
-  HS1  initiator: X25519 + ML-KEM-768 public keys                    x53   (first one 1225 bytes)
+secure-channel packets on UDP 7100: 1261, between 6 address pairs
+  HS1  initiator: X25519 + ML-KEM-768 public keys                    x5    (first one 1225 bytes)
   HS2  responder: X25519 + ML-KEM ciphertext + encrypted identity    x3    (first one 1249 bytes)
   HS3  initiator: encrypted identity + signature                     x5    (first one 121 bytes)
-  DATA ChaCha20-Poly1305 frame                                       x916  (first one 1322 bytes)
+  DATA ChaCha20-Poly1305 frame                                       x1248 (first one 1322 bytes)
 
 sample HS1:
-  01 14 a2 ff 96 08 5e 6b f9 23 76 9f 98 00 74 4a 3d 6b 7c 0b 34 68 bf 90 9a 62 40 9d 46 f3 4e 46
-  cd 1e ec a8 5f c4 3c 3b 08 38 2c 3c ef 43 14 e3 14 a9 49 cc 4a 9d 58 5e 22 ab 49 8b da 82 77 f6
-  10 1a c4 10 e5 f0 57 3b 34 96 89 1c 3d 92 92 29 b7 33 2b 91 93 2e be 37 c8 c6 c8 11 c7 e9 7d 57
+  01 b1 73 ce 4e f9 7c 8d 68 51 76 c1 39 87 b3 3c 0d dd de 16 9a 61 b1 13 50 a9 2f a7 ab 2a d1 97
+  0c 8d ee 7f ab bd 7e 9b 75 5d ec 2e 72 26 33 24 21 6c 0f 55 af dd d3 0d 8e b2 89 65 62 22 4b 19
+  01 98 b5 5c ed 68 3e 26 28 9b 68 e0 73 32 e0 aa c3 58 c1 77 87 89 ad 42 c4 3a 13 32 d4 ba 68 0e
   ... 1129 more bytes
 
 sample HS2:
-  02 14 a2 ff 96 08 5e 6b f9 44 81 7e b7 c3 72 85 d1 fc 44 60 cb 25 6c 7a 67 60 0f ee f4 2c 17 ae
-  09 4b 4d fd 1c 15 e4 59 f6 5b c7 36 50 f6 a5 54 34 4f 41 fb b3 4e 4a 58 75 3a 68 28 1d ff 3a 70
-  cb ca d0 9a a2 19 1b f7 6d a5 a1 b1 66 40 37 9f 7e 54 3b f6 ab a6 f7 0e 60 e6 03 fe 42 4b e4 dc
+  02 b1 73 ce 4e f9 7c 8d 68 4e 45 36 aa ae 1b 26 fb f4 c6 52 30 8b 73 76 f2 65 7d 76 a6 6d 44 9e
+  77 ba 97 3e 9d 77 e6 7f 98 a0 ca bc c3 58 c2 d1 67 1c 47 7b 76 b0 df 34 96 b4 4b 83 f9 1a 43 b1
+  c4 ac fb 09 f4 7e cd fa f3 e1 b4 81 57 51 1a d8 99 61 46 39 3e 9e 5a 55 ff b1 8b af 60 ea ad 43
   ... 1153 more bytes
 
 sample HS3:
-  03 44 81 7e b7 c3 72 85 d1 53 f7 fb 5f b3 b0 58 9b e6 f9 19 f9 70 47 f2 b5 55 2a eb d5 40 1b 8b
-  6f 75 7e cd 6f b3 63 ea 6d e5 28 5d 3b 06 64 33 30 93 5d 28 6d dc 38 7a 58 92 1f 86 d2 c1 d2 56
-  9d 28 75 40 fc ab 23 44 a0 99 0d 57 df 68 d4 ed e2 6c 4d ff e0 b6 0b 81 98 b0 ef c8 ea 86 2a 0f
+  03 4e 45 36 aa ae 1b 26 fb 19 9e 8f 39 05 6d c1 05 20 4a a4 46 b9 4d 62 1d ac 6c 6c d8 70 d3 fb
+  c2 86 d1 77 4f 6e 67 8a 02 4e 31 e3 35 81 58 5e ed bb dc 64 9b 2a 0d 07 27 6d d4 9a b3 98 65 09
+  49 e9 50 3f d5 3e d1 20 34 0a 85 9c 7b 72 da 1b 69 87 18 90 97 54 6f a2 1d d1 0a f5 99 67 df 3a
   ... 25 more bytes
 
 sample DATA:
-  04 44 81 7e b7 c3 72 85 d1 01 00 00 00 00 00 00 00 61 fd 61 fb 2d 33 f2 ed 85 6b ac 43 f9 98 0c
-  a1 75 09 d3 88 8a 5e d3 49 24 ce 0a 8f c4 aa d9 d9 53 4e ab 4d 49 12 f0 55 aa 02 1b 33 49 27 8e
-  8e cd 78 e3 5a ba 48 14 96 e5 1d 85 52 91 b6 a7 ff 61 63 df 21 b9 b3 26 59 ad da 65 53 64 cd 28
+  04 4e 45 36 aa ae 1b 26 fb 01 00 00 00 00 00 00 00 b8 ba a6 4d b6 9f de 76 6b cb d6 ef e9 04 cc
+  a5 26 5b 3d 82 e7 ff fa 1f b4 30 d6 8e 69 42 54 05 86 f8 63 83 f1 c6 e1 f2 cd d9 6d c4 a4 c8 dd
+  85 72 d7 94 2f 96 17 f3 ce 82 77 16 96 3c 52 a4 c5 37 45 a1 e4 13 f2 e1 ee a9 75 09 b3 e4 b7 e0
   ... 1226 more bytes
 
-encrypted payload: 37469 bytes, entropy 7.993 bits/byte (8.0 = indistinguishable from random)
-plaintext '42000 AZN'                                        not present anywhere in the capture
-plaintext 'budget.txt'                                       not present anywhere in the capture
-plaintext 'Q3 budget'                                        not present anywhere in the capture
+encrypted payload: 48701 bytes, entropy 7.996 bits/byte (8.0 = indistinguishable from random)
+plaintext 'index.html'                                       not present anywhere in the capture
+plaintext 'Shusha Workspace'                                 not present anywhere in the capture
+plaintext 'Reviewed by the admin'                            not present anywhere in the capture
+plaintext 'shusha-team'                                      not present anywhere in the capture
 plaintext 'alice'                                            not present anywhere in the capture
 plaintext 'bob'                                              not present anywhere in the capture
-plaintext 'shusha-team'                                      not present anywhere in the capture

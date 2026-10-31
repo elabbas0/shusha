@@ -1,0 +1,8 @@
+[programs that exit]
+  ok    /dev/meminfo reports free and total frames
+    running `ws status`: free 58341 -> 58337 of 65505 frames (-4 over 30 runs)
+  ok    running `ws status` 30 times keeps its memory (lost 4 frames, at most 16)
+    running seccheck (drops to a user, is refused): free 58337 -> 58337 of 65505 frames (+0 over 30 runs)
+  ok    running seccheck (drops to a user, is refused) 30 times keeps its memory (lost 0 frames, at most 16)
+
+PASS: 0 failure(s)

@@ -46,7 +46,7 @@ tries every one of these calls as an ordinary user.
 
 ## Tests
 
-- **`scripts/auth-test.py` (one machine, 26 checks):**
+- **`scripts/auth-test.py` (one machine, 25 checks):**
   - the kernel gates;
   - first-account setup;
   - no plaintext on disk;

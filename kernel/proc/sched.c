@@ -3,6 +3,7 @@
 #include "../memory/pmm.h"
 #include "../memory/vmm.h"
 #include "../memory/pf.h"
+#include "../ipc/shm.h"
 #include "../cpu/gdt.h"
 #include "../fs/fd.h"
 #include "../fs/vfs.h"
@@ -42,7 +43,15 @@ static process_t *alloc_process(void) {
     return (process_t *)alloc_object_page();
 }
 
+static thread_t *spare_threads;
+
 static thread_t *alloc_thread(void) {
+    if (spare_threads) {
+        thread_t *t = spare_threads;
+        spare_threads = t->next;
+        t->next = 0;
+        return t;  /* zeroed when it was set aside */
+    }
     return (thread_t *)alloc_object_page();
 }
 
@@ -181,9 +190,47 @@ static void prepare_kernel_thread_stack(thread_t *thread, uint64_t stack_top, vo
     thread->kernel_rsp = (uint64_t)sp;
 }
 
-process_t *proc_create_empty(process_kind_t kind) {
-    process_t *proc = alloc_process();
+/* Shusha: the records of reaped user processes are reused instead of
+ * freed.  They never leave process_list, so code walking the list (even
+ * one preempted mid-walk) never follows a pointer into freed memory, and
+ * the records in use stay bounded by the most processes alive at once.
+ * Their thread records go to a spare list for proc_create_user_thread. */
 
+static void zero_page(void *page) {
+    uint8_t *b = (uint8_t *)page;
+    for (int i = 0; i < (int)PAGE_SIZE_4K; i++) b[i] = 0;
+}
+
+static process_t *recycle_process(void) {
+    for (process_t *p = process_list; p; p = p->next_all) {
+        thread_t *t = p->main_thread;
+        process_t *link;
+        if (p->kind != PROCESS_USER) continue;
+        /* reaped, or exited with nobody left to wait for it */
+        if (p->state != PROCESS_REAPED &&
+            !(p->state == PROCESS_EXITED &&
+              (!p->parent || p->parent->state == PROCESS_EXITED || p->parent->state == PROCESS_REAPED))) continue;
+        if (!t || !t->detached || t == current_thread_ptr) continue;
+        if (p->addr_space != vmm_kernel_address_space()) continue;
+        for (process_t *c = process_list; c; c = c->next_all) {
+            if (c->parent == p) c->parent = NULL;  /* its children are orphans now */
+        }
+        zero_page(t);
+        t->next = spare_threads;
+        spare_threads = t;
+        link = p->next_all;
+        zero_page(p);
+        p->next_all = link;
+        return p;
+    }
+    return NULL;
+}
+
+process_t *proc_create_empty(process_kind_t kind) {
+    process_t *proc = kind == PROCESS_USER ? recycle_process() : NULL;
+    int reused = proc != NULL;
+
+    if (!proc) proc = alloc_process();
     if (!proc) {
         return NULL;
     }
@@ -198,7 +245,7 @@ process_t *proc_create_empty(process_kind_t kind) {
     proc->process_group_id = proc->pid;
     proc->cwd = proc->parent ? proc->parent->cwd : vfs_root();
     proc->main_thread = NULL;
-    register_process(proc);
+    if (!reused) register_process(proc);
     return proc;
 }
 
@@ -352,6 +399,49 @@ static void schedule_inner(int force) {
 
     if (!force && ++tick_count % SCHED_TICKS != 0) {
         return;
+    }
+
+    {
+        /* Shusha: a dead thread leaves the ring as the scan passes it, and
+         * its process's memory goes back to the allocator.  ICDA kept
+         * every dead thread here (the scan gave up after 1024 of them)
+         * and never freed a process's pages.  The current thread is never
+         * touched: an exiting thread is still running on its stack. */
+        thread_t *before = current_thread_ptr;
+        next = current_thread_ptr->next;
+        while (next != current_thread_ptr) {
+            if (next->state == THREAD_ZOMBIE && next != idle_thread_ptr &&
+                !(next->owner && next->owner->kind == PROCESS_USER && current_thread_ptr->owner &&
+                  next->owner->addr_space != vmm_kernel_address_space() &&
+                  next->owner->addr_space == current_thread_ptr->owner->addr_space)) {
+                process_t *owner = next->owner;
+                before->next = next->next;
+                next->detached = 1;
+                if (owner && owner->kind == PROCESS_USER && owner->addr_space &&
+                    owner->addr_space != vmm_kernel_address_space()) {
+                    shm_release_address_space(owner->addr_space);
+                    vmm_destroy_address_space(owner->addr_space);
+                    owner->addr_space = vmm_kernel_address_space();
+                }
+                /* Both kernel stacks of a user thread came from
+                 * alloc_kernel_stack(); nothing runs on them any more.
+                 * The process and thread records stay (waitpid, pids). */
+                if (owner && owner->kind == PROCESS_USER) {
+                    if (next->kernel_stack_top) {
+                        pmm_free_range(VIRT_TO_PHYS(next->kernel_stack_top - KERNEL_STACK_SIZE), KERNEL_STACK_PAGES);
+                        next->kernel_stack_top = 0;
+                    }
+                    if (next->user_entry_stack_top) {
+                        pmm_free_range(VIRT_TO_PHYS(next->user_entry_stack_top - KERNEL_STACK_SIZE), KERNEL_STACK_PAGES);
+                        next->user_entry_stack_top = 0;
+                    }
+                }
+                next = before->next;
+                continue;
+            }
+            before = next;
+            next = next->next;
+        }
     }
 
     next = current_thread_ptr->next;

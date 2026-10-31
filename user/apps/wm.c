@@ -849,7 +849,10 @@ static void move_window(int idx, int x, int y) {
     damage_window(w);
 }
 
+static void reap_launchers(void);
+
 static void reap_dead_windows(void) {
+    reap_launchers();
     for (int i = 0; i < MAX_WIN; i++) {
         sh_proc_info_t info;
         if (!wins[i].used || wins[i].anim == ANIM_CLOSE) continue;
@@ -1104,6 +1107,9 @@ static int pump_input(void) {
     return busy;
 }
 
+#define MAX_LAUNCH 16
+static uint64_t launch_pids[MAX_LAUNCH];
+
 /* Run a program as the session user (or the login screen's uid): the
  * root-only helper switches uid and directory, then starts it. */
 static void launch_as(uint32_t uid, const char *dir, const char *path, const char *args) {
@@ -1117,7 +1123,26 @@ static void launch_as(uint32_t uid, const char *dir, const char *path, const cha
         str_cat(a, " ", sizeof(a));
         str_cat(a, args, sizeof(a));
     }
-    (void)sh_spawn_args("/sbin/launch.app", a);
+    {
+        long pid = sh_spawn_args("/sbin/launch.app", a);
+        for (int i = 0; pid > 0 && i < MAX_LAUNCH; i++) {
+            if (!launch_pids[i]) { launch_pids[i] = (uint64_t)pid; break; }
+        }
+    }
+}
+
+/* launch.app exits as soon as the program is started; collect it so the
+ * kernel can reuse its process record. */
+static void reap_launchers(void) {
+    for (int i = 0; i < MAX_LAUNCH; i++) {
+        sh_proc_info_t info;
+        if (!launch_pids[i]) continue;
+        if (sh_proc_info(launch_pids[i], &info) != 0) launch_pids[i] = 0;
+        else if (info.state == SH_PROC_EXITED) {
+            (void)sh_waitpid(launch_pids[i]);
+            launch_pids[i] = 0;
+        }
+    }
 }
 
 static void session_spawn(const char *path) {

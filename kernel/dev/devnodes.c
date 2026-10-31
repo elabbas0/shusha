@@ -297,7 +297,7 @@ int dev_is_random(vfs_node_t *node) {
 }
 
 /* ---- /dev/udp and /dev/netinfo (served by syscall.c via kernel/net/udp.c) ---- */
-static vfs_node_t *dev_udp_node, *dev_netinfo_node;
+static vfs_node_t *dev_udp_node, *dev_netinfo_node, *dev_meminfo_node;
 
 int dev_is_udp(vfs_node_t *node) {
     return node && node == dev_udp_node;
@@ -305,6 +305,11 @@ int dev_is_udp(vfs_node_t *node) {
 
 int dev_is_netinfo(vfs_node_t *node) {
     return node && node == dev_netinfo_node;
+}
+
+/* /dev/meminfo: free and total 4 KiB frames, as text (served by syscall.c). */
+int dev_is_meminfo(vfs_node_t *node) {
+    return node && node == dev_meminfo_node;
 }
 
 /* ---- identity / permission control files ----
@@ -362,6 +367,8 @@ int dev_populate(void) {
     if (!vfs_resolve(vfs_root(), "/dev/netinfo")) (void)vfs_create(vfs_root(), "/dev/netinfo");
     dev_udp_node = vfs_resolve(vfs_root(), "/dev/udp");
     dev_netinfo_node = vfs_resolve(vfs_root(), "/dev/netinfo");
+    if (!vfs_resolve(vfs_root(), "/dev/meminfo")) (void)vfs_create(vfs_root(), "/dev/meminfo");
+    dev_meminfo_node = vfs_resolve(vfs_root(), "/dev/meminfo");
     vfs_node_set_mode(dev_udp_node, 0666);
     {
         static const char *const names[4] = { "/dev/setuid", "/dev/chmod", "/dev/chown", "/dev/killuid" };

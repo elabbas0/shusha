@@ -281,6 +281,26 @@ static long read_netinfo(process_t *proc, const char *path, char *buf, uint64_t 
     return (long)n;
 }
 
+/* /dev/meminfo: "free <frames>\ntotal <frames>\n" (4 KiB frames). */
+static long read_meminfo(process_t *proc, const char *path, char *buf, uint64_t cap) {
+    char tmp[64];
+    uint64_t n = 0, vals[2] = { pmm_free_frames(), pmm_total_frames() };
+    static const char *const keys[2] = { "free ", "total " };
+    if (!dev_is_meminfo(vfs_resolve(cwd_of(proc), path))) return -1;
+    for (int k = 0; k < 2; k++) {
+        char d[24];
+        int nd = 0;
+        uint64_t v = vals[k];
+        for (const char *c = keys[k]; *c; c++) tmp[n++] = *c;
+        do { d[nd++] = (char)('0' + v % 10); v /= 10; } while (v);
+        while (nd) tmp[n++] = d[--nd];
+        tmp[n++] = '\n';
+    }
+    if (n > cap) n = cap;
+    for (uint64_t i = 0; i < n; i++) buf[i] = tmp[i];
+    return (long)n;
+}
+
 /* /dev/udp writes: bind, unbind, send (see kernel/net/udp.h). */
 static uint64_t udp_write(process_t *proc, const uint8_t *buf, uint64_t size) {
     uint16_t a, b;
@@ -350,6 +370,7 @@ static uint64_t sys_vfs_read(const char *path, char *buf, uint64_t cap) {
         long n = read_dev_random(proc, path, buf, cap - 1);
         if (n < 0) n = read_dev_uid(proc, path, buf, cap - 1);
         if (n < 0) n = read_netinfo(proc, path, buf, cap - 1);
+        if (n < 0) n = read_meminfo(proc, path, buf, cap - 1);
         if (n >= 0) {
             buf[n] = '\0';
             return (uint64_t)n;
@@ -441,6 +462,7 @@ static uint64_t sys_vfs_read_at(const char *path, uint64_t offset, char *buf, ui
         long n = read_dev_random(proc, path, buf, cap);
         if (n < 0 && offset == 0) n = read_dev_uid(proc, path, buf, cap);
         if (n < 0 && offset == 0) n = read_netinfo(proc, path, buf, cap);
+        if (n < 0 && offset == 0) n = read_meminfo(proc, path, buf, cap);
         if (n < 0 && dev_is_udp(vfs_resolve(cwd_of(proc), path))) {
             n = udp_recv(proc->pid, (uint8_t *)buf, cap);
             if (n < 0) return (uint64_t)-1;
@@ -1633,8 +1655,8 @@ static uint64_t linux_syscall_dispatch(struct registers *regs) {
             for (uint64_t i = 0; i < pages; i++) {
                 uint64_t phys = pmm_alloc();
                 if (!phys) return (uint64_t)-1;
-                uint64_t vmm_flags = VMM_FLAGS_USER_RW;
-                if (!(prot & 2)) vmm_flags = VMM_FLAGS_USER_RO;
+                uint64_t vmm_flags = VMM_FLAGS_USER_RW | VMM_OWNED;
+                if (!(prot & 2)) vmm_flags = VMM_FLAGS_USER_RO | VMM_OWNED;
                 if (vmm_map_page(proc->addr_space, addr + i * PAGE_SIZE_4K, phys, vmm_flags) != 0) {
                     pmm_free(phys);
                     return (uint64_t)-1;
@@ -1683,7 +1705,8 @@ static uint64_t linux_syscall_dispatch(struct registers *regs) {
             if (!proc || !proc->addr_space) {
                 return (uint64_t)-U_EINVAL;
             }
-            newflags = (prot & 2) ? VMM_FLAGS_USER_RW : VMM_FLAGS_USER_RO;
+            /* mmap/brk/image pages only (shm and the framebuffer are refused above) */
+            newflags = ((prot & 2) ? VMM_FLAGS_USER_RW : VMM_FLAGS_USER_RO) | VMM_OWNED;
             for (page = addr; page < end; page += PAGE_SIZE_4K) {
                 uint64_t phys = vmm_virt_to_phys(proc->addr_space, page);
                 if (!phys) {
@@ -1746,7 +1769,7 @@ static uint64_t linux_syscall_dispatch(struct registers *regs) {
                 for (uint64_t page = old_end; page < new_end; page += PAGE_SIZE_4K) {
                     uint64_t phys = pmm_alloc();
                     if (!phys) break;
-                    if (vmm_map_page(proc->addr_space, page, phys, VMM_FLAGS_USER_RW) != 0) {
+                    if (vmm_map_page(proc->addr_space, page, phys, VMM_FLAGS_USER_RW | VMM_OWNED) != 0) {
                         pmm_free(phys);
                         break;
                     }

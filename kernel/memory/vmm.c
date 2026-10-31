@@ -251,23 +251,36 @@ addr_space_t *vmm_create_address_space(void) {
     return as;
 }
 
-// free all PT pages under a PD (user half only)
+// free all PT pages under a PD (user half only), and the frames they map
+// that the address space owns (PTE_OWNED)
 static void free_pt_range(pte_t *pd) {
     for (int i = 0; i < PT_ENTRIES; i++) {
         if (!(pd[i] & PTE_PRESENT)) continue;
         if (pd[i] & PTE_HUGE) { pd[i] = 0; continue; }
+        {
+            pte_t *pt = (pte_t *)PHYS_TO_VIRT(PTE_FRAME(pd[i]));
+            for (int j = 0; j < PT_ENTRIES; j++) {
+                if ((pt[j] & PTE_PRESENT) && (pt[j] & PTE_OWNED)) pmm_free(PTE_FRAME(pt[j]));
+                pt[j] = 0;
+            }
+        }
         pmm_free(PTE_FRAME(pd[i]));
         pd[i] = 0;
     }
 }
 
+/* Shusha: frees a process's own pages and page tables (ICDA never called
+ * this, so every exited program leaked all of its memory).  PML4[0] is
+ * the kernel's low mapping shared into every address space: left alone. */
 void vmm_destroy_address_space(addr_space_t *as) {
     if (!as || as == &kernel_as) return;
 
     pte_t *pml4 = (pte_t *)PHYS_TO_VIRT(as->pml4_phys);
+    pte_t *ker_pml4 = (pte_t *)PHYS_TO_VIRT(kernel_as.pml4_phys);
 
-    // walk user half only (entries 0-255)
-    for (int i4 = 0; i4 < 256; i4++) {
+    // walk user half only (entries 1-255)
+    for (int i4 = 1; i4 < 256; i4++) {
+        if (pml4[i4] == ker_pml4[i4]) continue;
         if (!(pml4[i4] & PTE_PRESENT)) continue;
         pte_t *pdpt = (pte_t *)PHYS_TO_VIRT(PTE_FRAME(pml4[i4]));
 
