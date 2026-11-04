@@ -30,6 +30,32 @@ static uint8_t my_seed[32], my_pub[32];
 static uint16_t my_port;
 static uint8_t pkt[NET_MAX_PAYLOAD];
 
+/* Relayed channels (docs/WORKSPACE.md, "Internet"): a peer that cannot
+ * be reached directly gets a virtual address 0.0.254.<id>; packets to it
+ * go to the relay hook, and packets that arrive through the relay are fed
+ * back with chan_inject.  The handshake and every frame are the same as
+ * direct ones, end to end, so the relaying machine only carries ciphertext. */
+static int (*relay_hook)(const net_addr_t *to, const void *pkt, uint64_t len);
+
+int chan_is_relay_addr(const uint8_t ip[4]) {
+    return ip[0] == 0 && ip[1] == 0 && ip[2] == 254;
+}
+
+void chan_set_relay(int (*hook)(const net_addr_t *to, const void *pkt, uint64_t len)) {
+    relay_hook = hook;
+}
+
+static int tx(const uint8_t ip[4], uint16_t port, const void *data, uint64_t len) {
+    if (chan_is_relay_addr(ip)) {
+        net_addr_t to;
+        if (!relay_hook) return -1;
+        mem_copy(to.ip, ip, 4);
+        to.port = port;
+        return relay_hook(&to, data, len);
+    }
+    return net_send(my_port, ip, port, data, len);
+}
+
 /* Messages that arrived while chan_connect was waiting. */
 #define BACKLOG 8
 static chan_msg_t backlog[BACKLOG];
@@ -53,6 +79,10 @@ int chan_init(const uint8_t sign_seed[32], const uint8_t sign_pub[32], uint16_t 
     mem_copy(my_pub, sign_pub, 32);
     my_port = port;
     return net_bind(port);
+}
+
+int chan_relayed(int c) {
+    return c >= 0 && c < CHAN_MAX && chans[c].state == ST_OPEN && chan_is_relay_addr(chans[c].peer.ip);
 }
 
 const uint8_t *chan_peer(int c) {
@@ -185,7 +215,7 @@ static void on_hs1(const uint8_t *p, long n, const net_addr_t *from) {
         hash2(th2, c->th, 32, out + 49 + SC_MLKEM_CT, 112);
         mem_copy(c->th, th2, 32);
     }
-    (void)net_send(my_port, from->ip, from->port, out, sizeof(out));
+    (void)tx(from->ip, from->port, out, sizeof(out));
     mem_wipe(ss, sizeof(ss));
     mem_wipe(ikm, sizeof(ikm));
     mem_wipe(k_hs_r, sizeof(k_hs_r));
@@ -218,6 +248,12 @@ static void dedupe(int n) {
 
 static void finish_keys(chan_t *c, int initiator) {
     uint8_t a[32], b[32];
+    if (mem_eq_ct(c->peer_pub, my_pub, 32)) {
+        /* our own packet came back (behind NAT every machine may share an
+         * address): never open a channel to ourselves */
+        chan_close((int)(c - chans));
+        return;
+    }
     expand(a, c->prk, "data i2r", c->th);
     expand(b, c->prk, "data r2i", c->th);
     mem_copy(c->k_send, initiator ? a : b, 32);
@@ -276,7 +312,7 @@ static void on_hs2(const uint8_t *p, long n, const net_addr_t *from) {
         hash2(th3, c->th, 32, out + 9, 112);
         mem_copy(c->th, th3, 32);
     }
-    (void)net_send(my_port, from->ip, from->port, out, sizeof(out));
+    (void)tx(from->ip, from->port, out, sizeof(out));
     finish_keys(c, 1);
 out:
     mem_wipe(ss, sizeof(ss));
@@ -355,6 +391,20 @@ static int pump_one(chan_msg_t *out, int *got) {
     return 1;
 }
 
+void chan_inject(const void *data, long n, const net_addr_t *from) {
+    chan_msg_t m;
+    if (n <= 0 || n > (long)sizeof(pkt)) return;
+    mem_copy(pkt, data, (uint64_t)n);
+    switch (pkt[0]) {
+    case HS1: on_hs1(pkt, n, from); break;
+    case HS2: on_hs2(pkt, n, from); break;
+    case HS3: on_hs3(pkt, n, from); break;
+    case DATA:
+        if (on_data(pkt, n, from, &m) && backlog_n < BACKLOG) backlog[backlog_n++] = m;
+        break;
+    }
+}
+
 int chan_poll(chan_msg_t *out) {
     int got;
     if (backlog_n) {
@@ -414,7 +464,7 @@ int chan_open(const uint8_t ip[4], uint16_t port) {
     if (i == CHAN_MAX) i = start_hs1(ip, port);
     else if (sh_ticks() - chans[i].hs1_sent < 50) return -1;
     chans[i].hs1_sent = sh_ticks();
-    (void)net_send(my_port, ip, port, chans[i].hs1, sizeof(chans[i].hs1));
+    (void)tx(ip, port, chans[i].hs1, sizeof(chans[i].hs1));
     return -1;
 }
 
@@ -430,7 +480,7 @@ int chan_connect(const uint8_t ip[4], uint16_t port, uint64_t timeout_ticks) {
         chan_msg_t m;
         int got;
         if (sh_ticks() >= resend) {
-            (void)net_send(my_port, ip, port, c->hs1, sizeof(c->hs1));
+            (void)tx(ip, port, c->hs1, sizeof(c->hs1));
             resend = sh_ticks() + 50;
         }
         while (pump_one(&m, &got)) {
@@ -450,11 +500,12 @@ int chan_send(int i, const void *data, uint64_t len) {
     if (i < 0 || i >= CHAN_MAX || len > CHAN_MAX_MSG) return -1;
     c = &chans[i];
     if (c->state != ST_OPEN) return -1;
+    if (chan_is_relay_addr(c->peer.ip) && len > CHAN_MAX_RELAYED) return -1;
     pkt[0] = DATA;
     mem_copy(pkt + 1, c->sid_peer, 8);
     sc_store64_le(pkt + 9, c->send_ctr);
     nonce_for(nonce, c->send_ctr);
     c->send_ctr++;
     sc_aead_seal(pkt + 17, pkt + 17 + len, data, len, pkt, 17, nonce, c->k_send);
-    return net_send(my_port, c->peer.ip, c->peer.port, pkt, 17 + len + 16);
+    return tx(c->peer.ip, c->peer.port, pkt, 17 + len + 16);
 }

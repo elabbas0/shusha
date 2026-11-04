@@ -3,6 +3,8 @@
  *   ws status | create <name> | invite | join <code> [name] | members
  *   ws put <file> | files | cat <file> | request <file> | requests
  *   ws grant <file> <rank> | deny <file> <rank> | get <file> <dest> | sync
+ *   ws endpoint [<ip>:<port>|off]   public address for invites (internet)
+ *   ws network [direct|relay]       relay = strict NAT, reach members via a relay
  */
 #include "lib.h"
 #include "wsclient.h"

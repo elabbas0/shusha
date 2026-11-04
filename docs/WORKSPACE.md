@@ -260,7 +260,7 @@ A live **edit session** exists while anyone is editing a file.
   online together, either directly or through a relay. Everything else
   syncs when anyone comes back.
 
-## 6. What v1 implements (LAN)
+## 6. What v1 implements (LAN and internet)
 
 `user/sbin/workspaced.c` (the service), `user/apps/ws.c` (the command) and
 `user/lib/chan.c` (the secure channel). Tested end to end by
@@ -322,9 +322,63 @@ sync`.
   access, add a file), requests (grant/deny) and activity. It refreshes
   every 2.5 s.
 
-Not yet in v1: stewards and succession, re-ranking, removal and rekeying,
-edit grants (any reader holding FK could re-encrypt; objects are only
-accepted if signed by the owner or a higher rank), rollback protection for
-objects, LAN beacons (members are found by the addresses in the log), the
-internet path (section 5), and co-editing (section 4). State lives in
-RAM on live images until on-disk ownership persistence lands.
+### Over the internet
+
+Members should not need to share a LAN. `scripts/internet-test.py` puts each
+of four machines alone behind its own NAT router. DHCP gives all four the
+same private address, and nothing can reach them from outside except one
+port forward.
+
+- **A public endpoint.** `ws endpoint <ip>:<port>` records where outsiders
+  reach this machine: its router's port forward to UDP 7100, or a public
+  address. Invites carry it, so a joiner anywhere knocks there.
+- **Addresses are learned, not configured.**
+  - Every member is reached at the address its last authenticated packet
+    came from. Behind NAT that is its router's public address and port.
+  - Channels follow a member when that address changes.
+  - Machines are told apart by their keys, never by their IP.
+- **Introductions.** Every 2 s, each member tells the others which members
+  it reaches directly, and where (`M_PEERS`). Two machines behind
+  different NATs both keep their NAT open by pinging, so each can use the
+  other's public endpoint. They then talk directly; the introducer is not
+  in the path.
+- **Relays, when there is no direct path.**
+  - A strict NAT is declared with `ws network relay`. It also applies when
+    direct tries fail while a relay is known.
+  - The channel then runs through a member that reaches both. The relay
+    only forwards frames (`M_RELAY` -> `M_RELAYED`) and is never chained.
+  - The handshake and every frame are the same as a direct channel's, end
+    to end, so the relay cannot read, forge or replay anything.
+  - `ws members` shows each member's path: `direct <ip>:<port>`,
+    `via <name> (relay)`, or `offline`.
+- **With the introducer gone,** members that reach each other directly
+  carry on. A relayed member needs some relay online.
+
+**Status: written, not yet run.** `scripts/internet-test.py` is meant to check the
+following, but it has not passed yet, so none of this is confirmed:
+
+| Check (`scripts/internet-test.py`) | Intended result |
+|---|---|
+| Four machines, each behind its own NAT, DHCP | all 10.0.2.15 |
+| Joins through the admin's public endpoint | ranks 1, 2, 3 |
+| Two NATed members after an introduction | direct to each other |
+| A strict-NAT member | reaches the others through the admin's relay |
+| A file from the strict member | replicated to all 3 (one direct, two relayed); readable where the rank allows |
+| Admin powered off | the two direct members keep sharing files |
+
+Not done yet:
+- finding members with no reachable member at all (DHT, or a rendezvous
+  service);
+- relays that choose the best path;
+- DNS names in `ws endpoint`;
+- TCP fallback for networks that block UDP.
+
+### Not yet in v1
+
+Stewards and succession, re-ranking, removal and rekeying, edit grants
+(any reader holding FK could re-encrypt; objects are only accepted if
+signed by the owner or a higher rank), rollback protection for objects,
+LAN beacons (members are found by the addresses in the log and by
+introductions), and co-editing (section 4). On a live image the workspace
+lasts until power off; on an installed machine it is saved in the
+encrypted state store (docs/STORAGE.md) and survives restarts.

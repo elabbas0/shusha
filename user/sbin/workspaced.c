@@ -53,7 +53,8 @@ enum { E_GENESIS = 1, E_JOIN = 2 };
 enum {
     M_JOIN_REQ = 1, M_JOIN_OK, M_JOIN_FAIL, M_LOG_GET, M_LOG_ENTRY, M_LOG_END,
     M_WRAP_GET, M_WRAP, M_NOTIFY, M_FILE_CHUNK, M_FILE_LIST_GET, M_FILE_LIST,
-    M_FILE_GET, M_ACCESS_REQ, M_ACK, M_PING, M_PONG
+    M_FILE_GET, M_ACCESS_REQ, M_ACK, M_PING, M_PONG,
+    M_PEERS, M_RELAY, M_RELAYED   /* internet: who is reachable where; relayed frames */
 };
 
 #define BEAT_TICKS    200 /* presence ping interval */
@@ -71,9 +72,18 @@ typedef struct {
     uint8_t ip[4];
     int have_wrap;
     sc_wrap_pub_t wrap;
+    /* Where this member was last reached (its address as we see it: behind
+     * NAT, the router's public address and port), and whether it can only
+     * be reached through a relay (it says so in its pings). */
+    uint8_t ep_ip[4];
+    uint16_t ep_port;
+    uint8_t relay_only;
     /* runtime only (reset at start) */
     uint64_t last_seen;
     int online, need_sync;
+    int via1;                 /* 1 + rank of a member that reaches it directly; 0 none */
+    uint64_t via_tick;
+    int tries;                /* direct handshakes since it was last heard */
 } member_t;
 
 enum { INV_FREE = 0, INV_OPEN, INV_USED };
@@ -103,9 +113,15 @@ typedef struct {
     invite_t inv[MAXINV];
     access_req_t req[MAXREQ];
     int nreq;
+    /* Internet (docs/WORKSPACE.md §5): this machine's public endpoint
+     * (a router port forward or a public address; put in invites), and
+     * whether direct contact is impossible here (strict NAT: relay only). */
+    uint8_t pub_ip[4];
+    uint16_t pub_port;
+    int net_relay;
 } state_t;
 
-#define STATE_MAGIC 0x31535753u /* "SWS1" */
+#define STATE_MAGIC 0x32535753u /* "SWS2" */
 
 static state_t st;
 static uint8_t sign_seed[32], sign_pub[32];
@@ -301,6 +317,12 @@ static int replay_log(void) {
             m->last_seen = keep[k].last_seen;
             m->online = keep[k].online;
             m->need_sync = keep[k].need_sync;
+            mem_copy(m->ep_ip, keep[k].ep_ip, 4);
+            m->ep_port = keep[k].ep_port;
+            m->relay_only = keep[k].relay_only;
+            m->via1 = keep[k].via1;
+            m->via_tick = keep[k].via_tick;
+            m->tries = keep[k].tries;
         }
         if (mem_eq_ct(m->sign_pub, sign_pub, 32)) {
             m->have_wrap = 1;
@@ -312,6 +334,7 @@ bad:
     mem_copy(st.m, keep, sizeof(keep));
     return -1;
 }
+
 
 static void wrap_hash_of(uint8_t out32[32], const sc_wrap_pub_t *w) {
     sc_sha256((const uint8_t *)w, sizeof(*w), out32);
@@ -411,17 +434,65 @@ static int is_me(const member_t *m) {
     return mem_eq_ct(m->sign_pub, sign_pub, 32);
 }
 
+/* ---- reaching members: LAN, internet, relays --------------------------- *
+ * A member is reached at the address we last heard it from (behind NAT:
+ * its router's public address and port), else at the LAN address in the
+ * log.  Every member tells the others, every beat, which members it
+ * reaches directly and at which address (M_PEERS): that lets two machines
+ * behind different NATs find each other (both keep their NAT open by
+ * pinging, so each other's public endpoint works).  Where no direct path
+ * works (a strict NAT, or `ws network relay`), the channel runs through a
+ * member that reaches both: the relay forwards opaque frames (M_RELAY ->
+ * M_RELAYED); the handshake and every frame are end to end. */
+
+static int net_ok(const uint8_t ip[4]) {
+    return ip[0] || ip[1] || ip[2] || ip[3];
+}
+
+static void relay_addr(net_addr_t *a, const member_t *m) {
+    a->ip[0] = 0; a->ip[1] = 0; a->ip[2] = 254; a->ip[3] = m->rank;
+    a->port = 1;
+}
+
+/* An open, direct channel to rank r, or -1. */
+static int direct_chan(int r) {
+    member_t *m = member_by_rank(r);
+    int ch = m ? chan_find(m->sign_pub) : -1;
+    return ch >= 0 && !chan_relayed(ch) ? ch : -1;
+}
+
+/* chan.c sends packets for 0.0.254.<rank> here. */
+static int relay_out(const net_addr_t *to, const void *pkt, uint64_t len) {
+    static uint8_t b[CHAN_MAX_MSG];
+    member_t *t = member_by_rank(to->ip[3]);
+    int rch = -1;
+    if (!t || len + 2 > CHAN_MAX_MSG) return -1;
+    if (t->via1) rch = direct_chan(t->via1 - 1);
+    for (int r = 0; rch < 0 && r < MAXM; r++) {
+        member_t *v = member_by_rank(r);
+        if (v && v != t && !is_me(v)) rch = direct_chan(r);
+    }
+    if (rch < 0) return -1;
+    b[0] = M_RELAY;
+    b[1] = t->rank;
+    mem_copy(b + 2, pkt, len);   /* copy first: pkt is chan.c's own buffer */
+    return chan_send(rch, b, len + 2);
+}
+
 /* A channel to a member: the open one if there is one; a fresh handshake
- * only if the member is believed online, so offline machines never
- * stall the daemon. */
+ * only if the member is believed online and reachable directly, so
+ * offline machines never stall the daemon (relayed channels are opened
+ * by the heartbeat). */
 static int connect_member(const member_t *m) {
     int ch;
     const uint8_t *peer;
-    if (is_me(m) || mem_eq_ct(m->ip, my_ip, 4)) return -1;
+    if (is_me(m)) return -1;
     ch = chan_find(m->sign_pub);
     if (ch >= 0) return ch;
-    if (!m->online) return -1;
-    ch = chan_connect(m->ip, WS_PORT, 300);
+    if (!m->online || m->relay_only || st.net_relay) return -1;
+    if (m->ep_port) ch = chan_connect(m->ep_ip, m->ep_port, 300);
+    else if (!mem_eq_ct(m->ip, my_ip, 4)) ch = chan_connect(m->ip, WS_PORT, 300);
+    else return -1;
     if (ch < 0) return -1;
     peer = chan_peer(ch);
     /* The channel authenticated a key; it must be the member's key. */
@@ -443,6 +514,7 @@ static int online_count(void) {
 /* Any authenticated message from a member counts as a sign of life. */
 static void seen(member_t *m) {
     m->last_seen = sh_ticks();
+    m->tries = 0;
     if (!m->online) {
         m->online = 1;
         m->need_sync = 1; /* catch up on whatever changed while apart */
@@ -450,15 +522,62 @@ static void seen(member_t *m) {
     }
 }
 
-/* Ping every member with an open channel and start handshakes to the
- * rest; anyone silent for OFFLINE_TICKS is marked offline and their
- * channel dropped, so a restarted peer gets a fresh handshake. */
+/* Try to reach a member we have no channel to. */
+static void reach(member_t *m, uint32_t beat) {
+    net_addr_t va;
+    int relay_known = m->via1 && sh_ticks() - m->via_tick < 1000 && direct_chan(m->via1 - 1) >= 0;
+    /* In relay-only mode only the admin (whose address the invite gave) is
+     * dialled directly; strict members are never dialled directly. */
+    int direct = !m->relay_only && (!st.net_relay || m->rank == 0);
+    if (direct && (m->tries < 3 || !relay_known || beat % 4 == 0)) {
+        /* the LAN address from the log, unless it is our own (behind NAT
+         * every machine may have the same private address) */
+        int lan = net_ok(m->ip) && !mem_eq_ct(m->ip, my_ip, 4);
+        if (m->ep_port && (beat & 1 || !lan)) (void)chan_open(m->ep_ip, m->ep_port);
+        else if (lan) (void)chan_open(m->ip, WS_PORT);
+        m->tries++;
+    }
+    if (relay_known && (!direct || m->tries >= 3)) {
+        relay_addr(&va, m);
+        (void)chan_open(va.ip, va.port);
+    }
+}
+
+/* Tell every member we reach which members we reach directly, and where. */
+static void send_peers(void) {
+    uint8_t b[2 + MAXM * 8];
+    int n = 0;
+    for (int r = 0; r < MAXM; r++) {
+        member_t *m = member_by_rank(r);
+        if (!m || is_me(m) || !m->online || direct_chan(r) < 0 || !m->ep_port) continue;
+        b[2 + n * 8] = m->rank;
+        mem_copy(b + 3 + n * 8, m->ep_ip, 4);
+        b[7 + n * 8] = (uint8_t)m->ep_port;
+        b[8 + n * 8] = (uint8_t)(m->ep_port >> 8);
+        b[9 + n * 8] = m->relay_only;
+        n++;
+    }
+    b[0] = M_PEERS;
+    b[1] = (uint8_t)n;
+    for (int r = 0; r < MAXM; r++) {
+        member_t *m = member_by_rank(r);
+        int ch;
+        if (!m || is_me(m) || (ch = chan_find(m->sign_pub)) < 0) continue;
+        (void)chan_send(ch, b, 2 + (uint64_t)n * 8);
+    }
+}
+
+/* Ping every member with an open channel and try to reach the rest;
+ * anyone silent for OFFLINE_TICKS is marked offline and their channel
+ * dropped, so a restarted peer gets a fresh handshake. */
 static void heartbeat(void) {
-    uint8_t ping = M_PING;
+    static uint32_t beat;
+    uint8_t ping[2] = { M_PING, (uint8_t)(st.net_relay ? 1 : 0) };
+    beat++;
     for (int i = 0; i < MAXM; i++) {
         member_t *m = &st.m[i];
         int ch;
-        if (!m->used || is_me(m) || mem_eq_ct(m->ip, my_ip, 4)) continue;
+        if (!m->used || is_me(m)) continue;
         ch = chan_find(m->sign_pub);
         if (m->online && sh_ticks() - m->last_seen > OFFLINE_TICKS) {
             m->online = 0;
@@ -466,9 +585,10 @@ static void heartbeat(void) {
             ch = -1;
             event(m->name, " went offline", 0);
         }
-        if (ch >= 0) (void)chan_send(ch, &ping, 1);
-        else (void)chan_open(m->ip, WS_PORT);
+        if (ch >= 0) (void)chan_send(ch, ping, 2);
+        else reach(m, beat);
     }
+    send_peers();
 }
 
 /* ---- files ------------------------------------------------------------- *
@@ -716,7 +836,8 @@ static void push_object(int ch, const uint8_t *o, uint64_t len) {
 }
 
 static int sync_pending;
-static uint8_t sync_from[4];
+static int sync_from_rank;
+static uint64_t relayed_frames;
 
 static void handle_peer(chan_msg_t *msg) {
     const uint8_t *d = msg->data;
@@ -806,14 +927,61 @@ static void handle_peer(chan_msg_t *msg) {
 
     /* Everything else is for members only. */
     if (!peer) return;
-    if (!mem_eq_ct(peer->ip, msg->from.ip, 4)) mem_copy(peer->ip, msg->from.ip, 4);
+    if (!chan_is_relay_addr(msg->from.ip)) {
+        /* where it really is now (behind NAT: its public endpoint) */
+        mem_copy(peer->ep_ip, msg->from.ip, 4);
+        peer->ep_port = msg->from.port;
+    }
     seen(peer);
 
     switch (d[0]) {
     case M_PING:
+        peer->relay_only = msg->len > 1 && (d[1] & 1);
         r[0] = M_PONG;
         reply(ch, r, 1);
         break;
+    case M_PEERS:
+        /* rank1 ip4 port2 strict1 for each member the sender reaches */
+        for (int i = 0; i < d[1] && 2 + (i + 1) * 8 <= msg->len; i++) {
+            const uint8_t *e = d + 2 + i * 8;
+            member_t *m = member_by_rank(e[0]);
+            if (!m || is_me(m) || m == peer) continue;
+            m->via1 = peer->rank + 1;
+            m->via_tick = sh_ticks();
+            if (chan_find(m->sign_pub) >= 0) continue;
+            m->relay_only = e[7] & 1;
+            /* adopt the address it is reached at, unless ours works */
+            if (!m->ep_port || m->tries >= 2) {
+                mem_copy(m->ep_ip, e + 1, 4);
+                m->ep_port = (uint16_t)(e[5] | e[6] << 8);
+            }
+        }
+        break;
+    case M_RELAY: {
+        /* to_rank1 frame: forward to that member, if we reach it directly.
+         * Never through a relayed channel (no chains). */
+        member_t *t = msg->len > 2 ? member_by_rank(d[1]) : 0;
+        int tch = t ? direct_chan(t->rank) : -1;
+        if (!t || is_me(t) || t == peer || chan_relayed(ch) || tch < 0) break;
+        r[0] = M_RELAYED;
+        r[1] = peer->rank;
+        mem_copy(r + 2, d + 2, (uint64_t)msg->len - 2);
+        (void)chan_send(tch, r, msg->len);
+        relayed_frames++;
+        break;
+    }
+    case M_RELAYED: {
+        /* from_rank1 frame: a channel packet from that member, through
+         * this peer.  It authenticates (or not) inside the channel. */
+        net_addr_t va;
+        member_t *f = msg->len > 2 ? member_by_rank(d[1]) : 0;
+        if (!f || is_me(f) || f == peer) break;
+        relay_addr(&va, f);
+        f->via1 = peer->rank + 1;
+        f->via_tick = sh_ticks();
+        chan_inject(d + 2, (long)msg->len - 2, &va);
+        break;
+    }
     case M_PONG:
         break;
     case M_LOG_GET: {
@@ -844,7 +1012,7 @@ static void handle_peer(chan_msg_t *msg) {
     }
     case M_NOTIFY:
         sync_pending = 1;
-        mem_copy(sync_from, msg->from.ip, 4);
+        sync_from_rank = peer->rank;
         break;
     case M_FILE_CHUNK: {
         uint32_t total = sc_load32_le(d + 17), off = sc_load32_le(d + 21), n = msg->len - 25u;
@@ -1140,9 +1308,17 @@ static void cmd_invite(void) {
     rand_bytes(st.inv[i].secret, 16);
     st.inv[i].state = INV_OPEN;
     save_state();
-    mem_copy(raw, my_ip, 4);
-    raw[4] = (uint8_t)WS_PORT;
-    raw[5] = (uint8_t)(WS_PORT >> 8);
+    /* Where the joiner should knock: our public endpoint if one is set
+     * (`ws endpoint`, for joiners over the internet), else our LAN address. */
+    if (st.pub_port) {
+        mem_copy(raw, st.pub_ip, 4);
+        raw[4] = (uint8_t)st.pub_port;
+        raw[5] = (uint8_t)(st.pub_port >> 8);
+    } else {
+        mem_copy(raw, my_ip, 4);
+        raw[4] = (uint8_t)WS_PORT;
+        raw[5] = (uint8_t)(WS_PORT >> 8);
+    }
     mem_copy(raw + 6, st.ws_id, 8);
     mem_copy(raw + 14, st.inv[i].secret, 16);
     str_copy(code, "shu", sizeof(code));
@@ -1216,8 +1392,39 @@ static void cmd_join(const char *code, const char *name) {
     say("\n");
 }
 
-static void cmd_members(void) {
+/* "direct 1.2.3.4:5678", "via <name> (relay)", or "offline". */
+static void say_path(const member_t *m) {
     char ip[16];
+    int ch = chan_find(m->sign_pub);
+    if (is_me(m)) {
+        say("this machine");
+        if (st.pub_port) {
+            say(", public ");
+            say(net_ip_text(ip, st.pub_ip));
+            say(":");
+            say_u(st.pub_port);
+        }
+        if (st.net_relay) say(", relay only");
+        return;
+    }
+    if (ch < 0 || !m->online) {
+        say("offline");
+        return;
+    }
+    if (chan_relayed(ch)) {
+        member_t *v = m->via1 ? member_by_rank(m->via1 - 1) : 0;
+        say("via ");
+        say(v ? v->name : "a member");
+        say(" (relay)");
+        return;
+    }
+    say("direct ");
+    say(net_ip_text(ip, m->ep_ip));
+    say(":");
+    say_u(m->ep_port);
+}
+
+static void cmd_members(void) {
     if (!st.active) {
         say("no workspace\n");
         return;
@@ -1230,11 +1437,72 @@ static void cmd_members(void) {
         say("  ");
         say(m->name);
         say("  ");
-        say(net_ip_text(ip, m->ip));
+        say_path(m);
         say("  key ");
         say_hex(m->sign_pub, 6);
         if (mem_eq_ct(m->sign_pub, sign_pub, 32)) say("  (you)");
         say("\n");
+    }
+}
+
+/* ws endpoint [<ip>:<port> | off]: the address members outside this LAN
+ * use to reach this machine (a router's port forward to UDP 7100, or a
+ * public address).  Invites carry it. */
+static void cmd_endpoint(const char *arg) {
+    char ip[16];
+    if (arg && str_eq(arg, "off")) {
+        mem_set(st.pub_ip, 0, 4);
+        st.pub_port = 0;
+        save_state();
+        say("public endpoint cleared; invites carry the LAN address\n");
+        return;
+    }
+    if (arg) {
+        char host[24];
+        uint64_t port = 0;
+        int k = 0;
+        while (arg[k] && arg[k] != ':' && k < 23) {
+            host[k] = arg[k];
+            k++;
+        }
+        host[k] = 0;
+        if (arg[k] == ':') {
+            for (const char *p = arg + k + 1; *p >= '0' && *p <= '9'; p++) port = port * 10 + (uint64_t)(*p - '0');
+        }
+        if (net_parse_ip(host, st.pub_ip) != 0 || !port || port > 65535) {
+            say("usage: ws endpoint <ip>:<port> | off\n");
+            return;
+        }
+        st.pub_port = (uint16_t)port;
+        save_state();
+    }
+    if (!st.pub_port) {
+        say("no public endpoint (LAN only); set one with: ws endpoint <ip>:<port>\n");
+        return;
+    }
+    say("public endpoint ");
+    say(net_ip_text(ip, st.pub_ip));
+    say(":");
+    say_u(st.pub_port);
+    say("\n");
+}
+
+/* ws network direct|relay: relay = this machine cannot be reached
+ * directly (strict NAT); members reach it, and it them, through a relay. */
+static void cmd_network(const char *arg) {
+    if (arg && str_eq(arg, "relay")) st.net_relay = 1;
+    else if (arg && str_eq(arg, "direct")) st.net_relay = 0;
+    else if (arg) {
+        say("usage: ws network direct|relay\n");
+        return;
+    }
+    if (arg) save_state();
+    say(st.net_relay ? "network: relay only (members are reached through a relay)\n"
+                     : "network: direct (relays are used only when needed)\n");
+    if (relayed_frames) {
+        say("relayed for others: ");
+        say_u(relayed_frames);
+        say(" frames\n");
     }
 }
 
@@ -1673,7 +1941,11 @@ static void q_members(void) {
         say_u((uint64_t)r);
         say("\t");
         q_tab(m->name);
-        q_tab(net_ip_text(ip, m->ip));
+        if (!is_me(m) && m->online && chan_find(m->sign_pub) >= 0 && chan_relayed(chan_find(m->sign_pub))) {
+            q_tab("relay");
+        } else {
+            q_tab(net_ip_text(ip, m->ep_port ? m->ep_ip : m->ip));
+        }
         q_tab(is_me(m) ? "you" : m->online ? "online" : "offline");
         say_hex(m->sign_pub, 6);
         say("\n");
@@ -1766,10 +2038,13 @@ static void run_command(char *line) {
     else if (str_eq(argv[0], "requests")) cmd_requests();
     else if (str_eq(argv[0], "grant") && argc > 2) cmd_grant(argv[1], (int)(argv[2][0] - '0'));
     else if (str_eq(argv[0], "sync")) cmd_sync();
+    else if (str_eq(argv[0], "endpoint")) cmd_endpoint(argc > 1 ? argv[1] : 0);
+    else if (str_eq(argv[0], "network")) cmd_network(argc > 1 ? argv[1] : 0);
     else {
         say("usage: ws status | create <name> | invite | join <code> [name] | members\n"
             "          put <file> | get <file> <dest> | files | cat <file> | request <file>\n"
-            "          requests | grant <file> <rank> | deny <file> <rank> | sync\n");
+            "          requests | grant <file> <rank> | deny <file> <rank> | sync\n"
+            "          endpoint [<ip>:<port>|off] | network [direct|relay]\n");
     }
 }
 
@@ -1808,6 +2083,7 @@ int main(void) {
         log_line("cannot bind the workspace port");
         return 1;
     }
+    chan_set_relay(relay_out);
     ctl = sh_msg_open(WS_CTL_QUEUE);
     if (!ctl || sh_msg_owner(ctl) != (long)sh_pid()) {
         log_line("control queue is owned by another process");
@@ -1818,6 +2094,9 @@ int main(void) {
         st.m[i].online = 0;
         st.m[i].last_seen = 0;
         st.m[i].need_sync = 0;
+        st.m[i].via1 = 0;
+        st.m[i].via_tick = 0;
+        st.m[i].tries = 0;
     }
     write_status();
 
@@ -1908,12 +2187,9 @@ int main(void) {
             if (which == 2) {
                 notify_all();
             } else {
-                for (int i = 0; i < MAXM; i++) {
-                    if (st.m[i].used && mem_eq_ct(st.m[i].ip, sync_from, 4)) {
-                        int ch = connect_member(&st.m[i]);
-                        if (ch >= 0) (void)sync_with(ch);
-                    }
-                }
+                member_t *from = member_by_rank(sync_from_rank);
+                int ch = from ? connect_member(from) : -1;
+                if (ch >= 0) (void)sync_with(ch);
             }
         }
         if (!busy) sh_sleep(1);

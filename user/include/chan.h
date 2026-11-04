@@ -21,6 +21,9 @@
 #define CHAN_PORT 7100
 #define CHAN_MAX 16
 #define CHAN_MAX_MSG 1360
+/* Largest message on a relayed channel: the relay adds a 2-byte header
+ * and the inner frame its own 33 bytes. */
+#define CHAN_MAX_RELAYED (CHAN_MAX_MSG - 2 - 33)
 
 typedef struct {
     int chan;                 /* channel index */
@@ -46,6 +49,14 @@ int  chan_send(int chan, const void *data, uint64_t len);
 int  chan_poll(chan_msg_t *out);
 const uint8_t *chan_peer(int chan);
 void chan_close(int chan);
+/* Relays (a peer behind NAT reached through another member): channels
+ * to the virtual address 0.0.254.<id> send through `hook`; packets the
+ * relay delivers are passed to chan_inject with that address as `from`. */
+int  chan_is_relay_addr(const uint8_t ip[4]);
+void chan_set_relay(int (*hook)(const net_addr_t *to, const void *pkt, uint64_t len));
+void chan_inject(const void *data, long n, const net_addr_t *from);
+/* 1 if open channel c runs through a relay. */
+int  chan_relayed(int c);
 /* Fill buf from /dev/random (dies loudly if unavailable). */
 void rand_bytes(void *buf, uint64_t len);
 
