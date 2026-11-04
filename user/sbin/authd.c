@@ -85,6 +85,7 @@ static void rand_bytes(void *p, uint64_t n) {
 static void save_db(void) {
     (void)sh_write_file(USERS_FILE, &db, sizeof(db));
     (void)sh_chmod(USERS_FILE, 0600);
+    (void)sh_sync();   /* on an installed disk: saved now, not in syncd's next round */
 }
 
 static int count_accounts(void) {
@@ -274,6 +275,8 @@ static acct_t *admin_reauth(svc_req_t *req, const char *pw) {
     return me;
 }
 
+static uint64_t restart_pending;
+
 static int handle(svc_req_t *req) {
     char *f[6];
     int n = fields(req, f, 6);
@@ -449,6 +452,94 @@ static int handle(svc_req_t *req) {
         log_line("password recovered for ", a->name);
         return 0;
     }
+    if (str_eq(verb, "store")) {
+        /* The state store (/dev/store): administrators and the login
+         * screen also see the disks; nobody gets a recovery code here. */
+        static char t[2048];
+        acct_t *me = by_uid(req->uid);
+        int full = system_caller || (me && (me->flags & ACCT_ADMIN));
+        long k = sh_read("/dev/store", t, sizeof(t) - 1);
+        if (k <= 0) return say("state none\n"), 0;
+        t[k] = 0;
+        for (char *p = t; *p;) {
+            char *e = p;
+            while (*e && *e != '\n') e++;
+            if (*e) *e++ = 0;
+            if (!str_starts(p, "recovery") && (full || (!str_starts(p, "device") && !str_starts(p, "can-install")))) {
+                say(p);
+                say("\n");
+            }
+            p = e;
+        }
+        mem_wipe(t, sizeof(t));
+        return 0;
+    }
+    if (str_eq(verb, "install")) {
+        /* caller password, disk number -> recovery code (shown once) */
+        static char t[2048];
+        char cmd[32];
+        long k;
+        if (n < 2) return say("fail\tmissing fields\n"), 1;
+        if (!admin_reauth(req, f[0])) return 1;
+        if (f[1][0] < '0' || f[1][0] > '9') return say("fail\tno such disk\n"), 1;
+        str_copy(cmd, "install ", sizeof(cmd));
+        str_cat(cmd, f[1], sizeof(cmd));
+        log_line("installing Shusha on disk ", f[1]);
+        if (sh_write_file("/dev/store", cmd, str_len(cmd)) < 0) {
+            k = sh_read("/dev/store", t, sizeof(t) - 1);
+            t[k > 0 ? k : 0] = 0;
+            say("fail\t");
+            for (char *p = t; *p; p++) {
+                if (str_starts(p, "note ")) {
+                    char *e = p + 5;
+                    while (*e && *e != '\n') e++;
+                    *e = 0;
+                    say(p + 5);
+                    break;
+                }
+            }
+            say("\n");
+            return 1;
+        }
+        k = sh_read("/dev/store", t, sizeof(t) - 1);
+        t[k > 0 ? k : 0] = 0;
+        say("ok\t");
+        for (char *p = t; *p; p++) {
+            if (str_starts(p, "recovery ")) {
+                char *e = p + 9;
+                while (*e && *e != '\n') e++;
+                *e = 0;
+                say(p + 9);
+                break;
+            }
+        }
+        say("\n");
+        (void)sh_write_file("/dev/store", "forget", 6);
+        mem_wipe(t, sizeof(t));
+        log_line("installed; this machine's accounts and files are now saved", 0);
+        return 0;
+    }
+    if (str_eq(verb, "unlock-store")) {
+        /* The login screen, with a disk bound to other hardware: recovery
+         * code -> unlocked and rebound, then the machine restarts so every
+         * service starts from the saved state. */
+        char cmd[96];
+        if (!system_caller) return say("fail\tonly the login screen can do this\n"), 1;
+        if (n < 1) return say("fail\tmissing fields\n"), 1;
+        str_copy(cmd, "unlock ", sizeof(cmd));
+        str_cat(cmd, f[0], sizeof(cmd));
+        if (sh_write_file("/dev/store", cmd, str_len(cmd)) < 0) {
+            mem_wipe(cmd, sizeof(cmd));
+            log_line("store unlock refused (wrong recovery code)", 0);
+            return say("fail\tThat recovery code is not right.\n"), 1;
+        }
+        mem_wipe(cmd, sizeof(cmd));
+        (void)sh_sync();
+        log_line("store unlocked with its recovery code; restarting", 0);
+        restart_pending = sh_ticks() + 250;
+        say("ok\n");
+        return 0;
+    }
     say("fail\tunknown request\n");
     return 1;
 }
@@ -488,6 +579,9 @@ int main(void) {
             mem_wipe(answer, sizeof(answer));
         } else if (r == 0) {
             sh_sleep(2);
+        }
+        if (restart_pending && sh_ticks() > restart_pending) {
+            (void)sh_power(1);   /* restart: the store now opens by itself */
         }
     }
 }

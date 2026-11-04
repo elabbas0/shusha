@@ -16,5 +16,6 @@ typedef enum {
 int diskfmt_format_device(uint32_t device_index, diskfmt_fs_t fs_type);
 int diskfmt_format_partition(uint32_t partition_index, diskfmt_fs_t fs_type);
 int diskfmt_set_partition_role(uint32_t partition_index, partition_role_t role);
+int diskfmt_layout_shusha(uint32_t device_index, const uint8_t state_type_guid[16], uint32_t salt);
 
 #endif

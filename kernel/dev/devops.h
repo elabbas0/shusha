@@ -81,7 +81,7 @@ int dev_is_meminfo(struct vfs_node *node);
  *   /dev/setuid  "<uid>"          drop to uid (root may pick any uid)
  *   /dev/chmod   "<octal> <path>" owner or root
  *   /dev/chown   "<uid> <path>"   root only */
-enum { DEV_CTL_NONE, DEV_CTL_SETUID, DEV_CTL_CHMOD, DEV_CTL_CHOWN, DEV_CTL_KILLUID };
+enum { DEV_CTL_NONE, DEV_CTL_SETUID, DEV_CTL_CHMOD, DEV_CTL_CHOWN, DEV_CTL_KILLUID, DEV_CTL_STORE };
 int dev_control_kind(struct vfs_node *node);
 
 /* Create /dev + nodes and register the three tables. Idempotent:

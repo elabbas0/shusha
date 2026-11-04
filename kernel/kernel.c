@@ -29,6 +29,7 @@
 #include "fs/install.h"
 #include "fs/ntfs.h"
 #include "fs/persistfs.h"
+#include "fs/store.h"
 #include "fs/vfs.h"
 #include "net/net.h"
 #include "syscall/syscall.h"
@@ -167,8 +168,34 @@ static int boot_cmdline_has_flag(void *multiboot_info, const char *flag) {
     return 0;
 }
 
+/* Copy the command line out of the multiboot info (that memory is not
+ * kept), for the state store's shusha.uuid= and boot flags. */
+static char boot_cmdline[512];
+
+static void boot_cmdline_save(void *multiboot_info) {
+    struct multiboot_info *info = (struct multiboot_info *)multiboot_info;
+    uint8_t *tag_ptr, *end_ptr;
+    boot_cmdline[0] = 0;
+    if (!multiboot_info) return;
+    tag_ptr = (uint8_t *)multiboot_info + 8;
+    end_ptr = (uint8_t *)multiboot_info + info->total_size;
+    while (tag_ptr < end_ptr) {
+        struct multiboot_tag *tag = (struct multiboot_tag *)tag_ptr;
+        if (tag->type == MULTIBOOT_TAG_TYPE_END) break;
+        if (tag->type == MULTIBOOT_TAG_TYPE_CMDLINE) {
+            const char *s = ((struct multiboot_tag_string *)tag)->string;
+            uint64_t i = 0;
+            while (s[i] && i + 1 < sizeof(boot_cmdline)) { boot_cmdline[i] = s[i]; i++; }
+            boot_cmdline[i] = 0;
+            return;
+        }
+        tag_ptr += (tag->size + (MULTIBOOT_TAG_ALIGN - 1)) & ~(MULTIBOOT_TAG_ALIGN - 1);
+    }
+}
+
 void kernel_main(void *multiboot_info) {
     int live_installer = boot_cmdline_has_flag(multiboot_info, "icda.live=1");
+    boot_cmdline_save(multiboot_info);
     serial_init();
     bootstage_set(1, "serial");
 
@@ -438,27 +465,22 @@ void kernel_main(void *multiboot_info) {
     console_write_dec64(partition_count(), CONSOLE_STYLE_INFO);
     console_write("\n", CONSOLE_STYLE_INFO);
 
-    persistfs_set_live_mode(live_installer);
-    if (persistfs_init() == 0 && persistfs_present()) {
-        bootstage_set(19, "persist");
-        boot_prefix("storage");
-        console_write("persistent state online, loaded entries=", CONSOLE_STYLE_INFO);
-        console_write_dec64(persistfs_loaded_entries(), CONSOLE_STYLE_INFO);
-        if (persistfs_active_partition() >= 0) {
-            console_write(" backend=partition", CONSOLE_STYLE_MUTED);
-        } else {
-            console_write(" backend=device", CONSOLE_STYLE_MUTED);
-        }
-        console_write("\n", CONSOLE_STYLE_INFO);
-        if (system_install_present()) {
-            boot_line("system", "installed writable overlay active");
-        }
+    /* Shusha's encrypted, hardware-bound state store (kernel/fs/store.c)
+     * replaces ICDA's plaintext persistence.  The live image never opens
+     * an installed disk by itself; it can install one (/dev/store). */
+    persistfs_set_live_mode(1);
+    store_init(boot_cmdline, live_installer);
+    bootstage_set(19, "store");
+    if (store_state() == STORE_UNLOCKED) {
+        boot_line("storage", "state store unlocked: accounts and files are saved on this disk");
+    } else if (store_state() == STORE_LOCKED) {
+        boot_line("storage", "state store LOCKED: this disk is bound to other hardware (recovery code unlocks it)");
+    } else if (store_state() == STORE_DAMAGED) {
+        boot_line("storage", "state store unreadable; continuing without saved state");
+    } else if (live_installer) {
+        boot_line("storage", "live session: nothing is saved until Shusha is installed");
     } else {
-        if (live_installer) {
-            boot_line("storage", "live mode: disk persistence disabled, continuing with ramfs only");
-        } else {
-            boot_line("storage", "persistent state unavailable, continuing with ramfs only");
-        }
+        boot_line("storage", "no Shusha disk found; continuing without saved state");
     }
 
     bootstage_set(20, "mounts");

@@ -9,6 +9,9 @@ int system_install_device(uint32_t device_index, uint64_t *files_installed, uint
 int system_install_partitions(uint32_t efi_partition_index, uint32_t root_partition_index, int32_t swap_partition_index,
                               uint64_t *files_installed, uint64_t *bytes_installed);
 int system_install_present(void);
+/* Shusha: write GRUB, the given GRUB.CFG and this kernel to an EFI partition. */
+int system_install_boot_files(const partition_info_t *part, const char *cfg, uint64_t cfg_size);
+int system_install_assets_present(void);
 int system_install_write_root_bundle(const partition_info_t *part, const char *bundle, uint64_t size, int32_t swap_partition_index);
 int system_install_read_root_bundle(const partition_info_t *part, char **bundle_out, uint64_t *size_out, int32_t *swap_partition_index_out);
 

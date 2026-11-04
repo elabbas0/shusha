@@ -23,6 +23,7 @@ static uint64_t vfs_next_inode = 1;
 static uint64_t vfs_tick = 1;
 static const uint64_t VFS_NAME_CAP = 63;
 static int (*vfs_sync_hook)(void) = 0;
+static uint64_t vfs_change_count;
 
 static uint64_t str_len(const char *text) {
     uint64_t len = 0;
@@ -272,10 +273,12 @@ int vfs_permitted(vfs_node_t *node, uint32_t uid, int want) {
 }
 
 void vfs_node_set_owner(vfs_node_t *node, uint32_t uid) {
+    vfs_change_count++;
     if (node) node->uid = uid;
 }
 
 void vfs_node_set_mode(vfs_node_t *node, uint16_t mode) {
+    vfs_change_count++;
     if (node) node->mode = mode & 0777;
 }
 
@@ -305,6 +308,19 @@ int vfs_sync(void) {
         return 0;
     }
     return vfs_sync_hook();
+}
+
+/* Shusha: ICDA synced the whole tree to disk after every mkdir, create
+ * and write.  With an encrypted store that is a full re-encryption per
+ * write, so changes now only count here; the store flushes when asked
+ * (syncd every few seconds, power off, explicit sync). */
+static int vfs_changed(void) {
+    vfs_change_count++;
+    return 0;
+}
+
+uint64_t vfs_changes(void) {
+    return vfs_change_count;
 }
 
 vfs_node_t *vfs_resolve(vfs_node_t *cwd, const char *path) {
@@ -405,7 +421,7 @@ int vfs_mkdir(vfs_node_t *cwd, const char *path) {
     }
     append_child(parent, node);
     parent->modified = vfs_tick++;
-    return vfs_sync();
+    return vfs_changed();
 }
 
 int vfs_create(vfs_node_t *cwd, const char *path) {
@@ -429,7 +445,7 @@ int vfs_create(vfs_node_t *cwd, const char *path) {
     }
     append_child(parent, node);
     parent->modified = vfs_tick++;
-    return vfs_sync();
+    return vfs_changed();
 }
 
 int vfs_write(vfs_node_t *cwd, const char *path, const char *data, uint64_t size) {
@@ -464,7 +480,7 @@ int vfs_write(vfs_node_t *cwd, const char *path, const char *data, uint64_t size
     node->data = next;
     node->size = size;
     node->modified = vfs_tick++;
-    return vfs_sync();
+    return vfs_changed();
 }
 
 int vfs_node_write_at(vfs_node_t *node, uint64_t off, const char *data,
@@ -489,7 +505,7 @@ int vfs_node_write_at(vfs_node_t *node, uint64_t off, const char *data,
             node->data[off + i] = data[i];
         }
         node->modified = vfs_tick++;
-        return vfs_sync();
+        return vfs_changed();
     }
     next = (char *)kmalloc((size_t)(new_end + 1));
     if (!next) {
@@ -511,7 +527,7 @@ int vfs_node_write_at(vfs_node_t *node, uint64_t off, const char *data,
     node->data = next;
     node->size = new_end;
     node->modified = vfs_tick++;
-    return vfs_sync();
+    return vfs_changed();
 }
 
 int vfs_seed_readonly(const char *path, const char *data, uint64_t size) {

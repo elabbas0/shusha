@@ -139,6 +139,7 @@ static int ata_identify_device(ata_device_t *dev) {
     if (dev->sector_count == 0) {
         return -1;
     }
+    block_serial_from_identify(dev->block.serial, identify);
     dev->present = 1;
     return 0;
 }

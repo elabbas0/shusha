@@ -15,7 +15,14 @@ struct block_device {
     uint64_t sector_count;
     block_read_fn read;
     block_write_fn write;
+    /* Shusha: the drive's serial number from IDENTIFY (ASCII, trimmed,
+     * "" when unknown).  One of the hardware IDs the state store binds
+     * its key to. */
+    char serial[24];
 };
+
+/* IDENTIFY words 10-19 hold the serial as byte-swapped ASCII pairs. */
+void block_serial_from_identify(char out[24], const uint16_t *identify);
 
 int block_register(block_device_t *device);
 uint32_t block_count(void);

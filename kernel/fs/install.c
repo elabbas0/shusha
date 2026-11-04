@@ -112,6 +112,10 @@ static void install_write_line(int col, int row, int width, const char *text, co
     console_write(line, style);
 }
 
+/* Shusha installs from a userspace program that shows its own progress;
+ * ICDA's full-screen console progress stays off. */
+static int install_console_progress = 0;
+
 static void install_progress(const char *stage, const char *detail, uint64_t current, uint64_t total) {
     char line[160];
     int cols = install_console_cols();
@@ -122,7 +126,7 @@ static void install_progress(const char *stage, const char *detail, uint64_t cur
     int bar_width;
     uint64_t filled;
 
-    if (width < 32 || rows < 10) {
+    if (!install_console_progress || width < 32 || rows < 10) {
         return;
     }
 
@@ -188,7 +192,7 @@ static void install_progress(const char *stage, const char *detail, uint64_t cur
 }
 
 static void install_progress_done(void) {
-    console_clear();
+    if (install_console_progress) console_clear();
 }
 
 static void zero_bytes(uint8_t *dst, uint64_t size) {
@@ -651,7 +655,10 @@ static int fat32_upsert_file(const fat32_install_volume_t *vol, uint32_t parent_
     return fat32_write_dirent(vol, parent_cluster, &dirent);
 }
 
-static int fat32_install_boot_partition(const partition_info_t *part) {
+/* EFI system partition: \EFI\BOOT\BOOTX64.EFI (GRUB), \BOOT\GRUB\GRUB.CFG
+ * and \BOOT\KERNEL.BIN.  Shusha passes its own GRUB.CFG (generated at
+ * install time); ICDA's installer used the embedded one. */
+static int fat32_install_boot_files(const partition_info_t *part, const char *cfg, uint64_t cfg_size) {
     fat32_install_volume_t vol;
     uint32_t efi_cluster = 0;
     uint32_t boot_in_efi_cluster = 0;
@@ -660,7 +667,7 @@ static int fat32_install_boot_partition(const partition_info_t *part) {
     static const char startup_nsh[] = "\\EFI\\BOOT\\BOOTX64.EFI\r\n";
 
     if (boot_asset_efi_start == 0 || boot_asset_efi_size() == 0 ||
-        boot_asset_grub_cfg_start == 0 || boot_asset_grub_cfg_size() == 0 ||
+        !cfg || cfg_size == 0 ||
         boot_asset_kernel_bin_start == 0 || boot_asset_kernel_bin_size() == 0) {
         return -31;
     }
@@ -678,12 +685,28 @@ static int fat32_install_boot_partition(const partition_info_t *part) {
     if (fat32_create_file(&vol, vol.root_cluster, "STARTUP.NSH", startup_nsh, sizeof(startup_nsh) - 1, 0) != 0) return -36;
     install_progress("Writing boot files", "BOOTX64.EFI", 0, boot_asset_efi_size());
     if (fat32_create_file(&vol, boot_in_efi_cluster, "BOOTX64.EFI", boot_asset_efi_start, boot_asset_efi_size(), "BOOTX64.EFI") != 0) return -37;
-    install_progress("Writing boot files", "GRUB.CFG", 0, boot_asset_grub_cfg_size());
-    if (fat32_create_file(&vol, grub_cluster, "GRUB.CFG", boot_asset_grub_cfg_start, boot_asset_grub_cfg_size(), "GRUB.CFG") != 0) return -38;
+    install_progress("Writing boot files", "GRUB.CFG", 0, cfg_size);
+    if (fat32_create_file(&vol, grub_cluster, "GRUB.CFG", cfg, cfg_size, "GRUB.CFG") != 0) return -38;
     install_progress("Writing boot files", "KERNEL.BIN", 0, boot_asset_kernel_bin_size());
     if (fat32_create_file(&vol, boot_root_cluster, "KERNEL.BIN", boot_asset_kernel_bin_start, boot_asset_kernel_bin_size(), "KERNEL.BIN") != 0) return -39;
     install_progress("Preparing boot disk", "Boot partition complete", 7, 7);
     return 0;
+}
+
+static int fat32_install_boot_partition(const partition_info_t *part) {
+    if (boot_asset_grub_cfg_start == 0 || boot_asset_grub_cfg_size() == 0) return -31;
+    return fat32_install_boot_files(part, boot_asset_grub_cfg_start, boot_asset_grub_cfg_size());
+}
+
+int system_install_boot_files(const partition_info_t *part, const char *cfg, uint64_t cfg_size) {
+    int rc = fat32_install_boot_files(part, cfg, cfg_size);
+    install_progress_done();
+    return rc;
+}
+
+int system_install_assets_present(void) {
+    return boot_asset_efi_start != 0 && boot_asset_efi_size() != 0 &&
+           boot_asset_kernel_bin_start != 0 && boot_asset_kernel_bin_size() != 0;
 }
 
 int system_install_write_root_bundle(const partition_info_t *part, const char *bundle, uint64_t size, int32_t swap_partition_index) {

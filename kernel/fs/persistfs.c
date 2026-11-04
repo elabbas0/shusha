@@ -7,7 +7,7 @@
 #include "../memory/heap.h"
 
 #define PERSISTFS_MAGIC   0x31534641444349ULL
-#define PERSISTFS_VERSION 1U
+#define PERSISTFS_VERSION 2U   /* Shusha: v2 entries add owner and mode */
 #define PERSISTFS_SECTOR_SIZE 512U
 #define PERSISTFS_PATH_CAP 256U
 typedef struct {
@@ -27,6 +27,28 @@ typedef struct {
     uint64_t created;
     uint64_t modified;
 } __attribute__((packed)) persistfs_entry_t;
+
+/* Follows each entry in version 2. */
+typedef struct {
+    uint32_t uid;
+    uint16_t mode;
+    uint16_t reserved;
+} __attribute__((packed)) persistfs_owner_t;
+
+/* Runtime-only paths: device nodes, request mailboxes, live status. */
+static const char *const persistfs_volatile[] = {
+    "/dev", "/tmp", "/proc", "/var/ws/io", "/var/ws/status", "/var/auth/io", "/system/install", 0
+};
+
+static int persistfs_is_volatile(const char *path) {
+    for (int i = 0; persistfs_volatile[i]; i++) {
+        const char *v = persistfs_volatile[i];
+        uint64_t k = 0;
+        while (v[k] && path[k] == v[k]) k++;
+        if (!v[k] && (path[k] == 0 || path[k] == '/')) return 1;
+    }
+    return 0;
+}
 
 static int persistfs_available = 0;
 static uint64_t persistfs_entries_loaded = 0;
@@ -136,10 +158,14 @@ static uint64_t persistfs_measure_node(vfs_node_t *node, char *path, uint64_t ca
     if (path_push(path, cap, vfs_node_name(node)) != 0) {
         return 0;
     }
+    if (persistfs_is_volatile(path)) {
+        path_pop(path, old_len);
+        return 0;
+    }
 
     if (!vfs_node_readonly(node)) {
         uint64_t path_len = str_len(path);
-        total += sizeof(persistfs_entry_t) + path_len;
+        total += sizeof(persistfs_entry_t) + sizeof(persistfs_owner_t) + path_len;
         if (vfs_node_type(node) == VFS_NODE_FILE) {
             total += vfs_node_size(node);
         }
@@ -166,9 +192,14 @@ static uint8_t *persistfs_write_node(uint8_t *cursor, vfs_node_t *node, char *pa
     if (path_push(path, cap, vfs_node_name(node)) != 0) {
         return 0;
     }
+    if (persistfs_is_volatile(path)) {
+        path_pop(path, old_len);
+        return cursor;
+    }
 
     if (!vfs_node_readonly(node)) {
         persistfs_entry_t entry;
+        persistfs_owner_t owner;
         uint64_t path_len = str_len(path);
 
         entry.path_len = (uint16_t)path_len;
@@ -181,6 +212,11 @@ static uint8_t *persistfs_write_node(uint8_t *cursor, vfs_node_t *node, char *pa
 
         copy_bytes((char *)cursor, (const char *)&entry, sizeof(entry));
         cursor += sizeof(entry);
+        owner.uid = vfs_node_uid(node);
+        owner.mode = vfs_node_mode(node);
+        owner.reserved = 0;
+        copy_bytes((char *)cursor, (const char *)&owner, sizeof(owner));
+        cursor += sizeof(owner);
         copy_bytes((char *)cursor, path, path_len);
         cursor += path_len;
         if (entry.data_size) {
@@ -273,7 +309,7 @@ int persistfs_import_image(const char *buffer_in, uint64_t size, uint64_t *entri
 
     if (!buffer || size < sizeof(persistfs_header_t)) return -1;
     header = (persistfs_header_t *)buffer;
-    if (header->magic != PERSISTFS_MAGIC || header->version != PERSISTFS_VERSION ||
+    if (header->magic != PERSISTFS_MAGIC || (header->version != 1U && header->version != 2U) ||
         header->bytes_used < sizeof(persistfs_header_t) || header->bytes_used > size) {
         return -1;
     }
@@ -287,8 +323,15 @@ int persistfs_import_image(const char *buffer_in, uint64_t size, uint64_t *entri
         if ((uint64_t)(cursor - buffer) + sizeof(entry) > header->bytes_used) {
             return -1;
         }
+        persistfs_owner_t owner;
+        int has_owner = header->version >= 2U;
         copy_bytes((char *)&entry, (const char *)cursor, sizeof(entry));
         cursor += sizeof(entry);
+        if (has_owner) {
+            if ((uint64_t)(cursor - buffer) + sizeof(owner) > header->bytes_used) return -1;
+            copy_bytes((char *)&owner, (const char *)cursor, sizeof(owner));
+            cursor += sizeof(owner);
+        }
         if (entry.path_len == 0 || entry.path_len >= sizeof(path)) {
             return -1;
         }
@@ -303,9 +346,17 @@ int persistfs_import_image(const char *buffer_in, uint64_t size, uint64_t *entri
             cursor += entry.data_size;
         }
 
+        if (path[0] != '/' || persistfs_is_volatile(path)) {
+            continue;  /* never let a stored image recreate device or mailbox nodes */
+        }
         if (vfs_import_node(path, entry.type, entry.readonly, data, entry.data_size,
                             entry.inode, entry.created, entry.modified) != 0) {
             return -1;
+        }
+        if (has_owner) {
+            vfs_node_t *node = vfs_resolve(vfs_root(), path);
+            vfs_node_set_owner(node, owner.uid);
+            vfs_node_set_mode(node, owner.mode);
         }
         loaded++;
     }

@@ -38,7 +38,7 @@ KERNEL_OBJ := $(KERNEL_BASE_OBJ) $(B)/k/userprogs.o
 ULIB_OBJ := $(B)/u/lib/crt0.asm.o $(B)/u/lib/lib.o $(B)/u/lib/net.o $(B)/u/crypto/mem.o
 UGUI_OBJ := $(B)/u/lib/ui.o $(B)/u/lib/draw.o
 UPROGS   := init shell wm explorer terminal ipccheck fscheck lanping workspaced ws workspace \
-            authd launch greeter login users accounts code seccheck
+            authd launch greeter login users accounts code seccheck syncd install installer
 UCRYPTO  := $(patsubst %,$(B)/u/crypto/%.o,aead chacha20 poly1305 sha2 ed25519 mlkem keccak wrap)
 
 USERPROGS := /sbin/init.app=$(B)/user/init.app \
@@ -59,7 +59,10 @@ USERPROGS := /sbin/init.app=$(B)/user/init.app \
              /apps/users.app=$(B)/user/users.app \
              /apps/accounts.app=$(B)/user/accounts.app \
              /apps/code.app=$(B)/user/code.app \
-             /apps/seccheck.app=$(B)/user/seccheck.app
+             /apps/seccheck.app=$(B)/user/seccheck.app \
+             /sbin/syncd.app=$(B)/user/syncd.app \
+             /apps/install.app=$(B)/user/install.app \
+             /apps/installer.app=$(B)/user/installer.app
 
 # Test images (lan.iso): same programs, but init starts a root shell on the
 # text console instead of the login, so scripts can drive the machines.
@@ -116,6 +119,9 @@ $(B)/user/ws.app: $(B)/u/apps/ws.o $(B)/u/lib/wsclient.o $(ULIB_OBJ)
 $(B)/user/workspace.app: $(B)/u/apps/workspace.o $(B)/u/lib/wsclient.o $(UGUI_OBJ) $(ULIB_OBJ)
 $(B)/user/authd.app: $(B)/u/sbin/authd.o $(B)/u/lib/svc.o $(B)/u/crypto/argon2.o $(B)/u/crypto/blake2b.o $(ULIB_OBJ)
 $(B)/user/launch.app: $(B)/u/sbin/launch.o $(ULIB_OBJ)
+$(B)/user/syncd.app: $(B)/u/sbin/syncd.o $(ULIB_OBJ)
+$(B)/user/install.app: $(B)/u/apps/install.o $(ULIB_OBJ)
+$(B)/user/installer.app: $(B)/u/apps/installer.o $(B)/u/lib/svc.o $(UGUI_OBJ) $(ULIB_OBJ)
 $(B)/user/greeter.app: $(B)/u/sbin/greeter.o $(B)/u/lib/svc.o $(UGUI_OBJ) $(ULIB_OBJ)
 $(B)/user/login.app: $(B)/u/sbin/login.o $(B)/u/lib/svc.o $(ULIB_OBJ)
 $(B)/user/users.app: $(B)/u/apps/users.o $(B)/u/lib/svc.o $(ULIB_OBJ)
@@ -151,13 +157,46 @@ $(B)/k/userprogs-test.o: $(B)/gen/userprogs-test.asm
 	@mkdir -p $(dir $@)
 	$(ASM) -f elf64 $< -o $@
 
-$(B)/kernel.bin: $(KERNEL_OBJ) kernel/linker.ld
+# The installable kernel is linked twice: the "core" kernel is what gets
+# installed on a disk, and the boot kernel carries the core (stripped) plus
+# GRUB for the EFI partition, so a live session can install (kernel/fs/store.c).
+$(B)/kernel-core.bin: $(KERNEL_OBJ) kernel/linker.ld
 	$(CC) -T kernel/linker.ld -o $@ -ffreestanding -O0 -nostdlib -fno-pie -no-pie \
 	      $(KERNEL_OBJ) -lgcc
 
-$(B)/kernel-test.bin: $(KERNEL_BASE_OBJ) $(B)/k/userprogs-test.o kernel/linker.ld
+$(B)/kernel-test-core.bin: $(KERNEL_BASE_OBJ) $(B)/k/userprogs-test.o kernel/linker.ld
 	$(CC) -T kernel/linker.ld -o $@ -ffreestanding -O0 -nostdlib -fno-pie -no-pie \
 	      $(KERNEL_BASE_OBJ) $(B)/k/userprogs-test.o -lgcc
+
+$(B)/gen/bootx64-install.efi: boot/grub/grub-install.cfg
+	@mkdir -p $(dir $@)
+	grub-mkstandalone -O x86_64-efi -o $@ --locales="" --fonts="" --themes="" \
+	    --install-modules="normal configfile part_gpt part_msdos fat search search_fs_file search_fs_uuid search_label smbios all_video efi_gop efi_uga video_bochs video_cirrus gfxterm multiboot2 test echo boot" \
+	    "boot/grub/grub.cfg=boot/grub/grub-install.cfg"
+
+$(B)/gen/%-strip.bin: $(B)/%.bin
+	@mkdir -p $(dir $@)
+	strip -s -o $@ $<
+
+# boot_asset_{efi,kernel_bin}_{start,end} (kernel/fs/boot_assets.h)
+$(B)/k/assets-%.o: $(B)/gen/bootx64-install.efi $(B)/gen/%-strip.bin
+	@mkdir -p $(dir $@)
+	printf 'section .rodata\nglobal boot_asset_efi_start\nglobal boot_asset_efi_end\nglobal boot_asset_kernel_bin_start\nglobal boot_asset_kernel_bin_end\nalign 16\nboot_asset_efi_start: incbin "%s"\nboot_asset_efi_end:\nalign 16\nboot_asset_kernel_bin_start: incbin "%s"\nboot_asset_kernel_bin_end:\nsection .note.GNU-stack noalloc noexec nowrite progbits\n' \
+	    $(B)/gen/bootx64-install.efi $(B)/gen/$*-strip.bin > $(B)/gen/assets-$*.asm
+	$(ASM) -f elf64 $(B)/gen/assets-$*.asm -o $@
+
+$(B)/kernel.bin: $(KERNEL_OBJ) $(B)/k/assets-kernel-core.o kernel/linker.ld
+	$(CC) -T kernel/linker.ld -o $@ -ffreestanding -O0 -nostdlib -fno-pie -no-pie \
+	      $(KERNEL_OBJ) $(B)/k/assets-kernel-core.o -lgcc
+
+$(B)/kernel-test.bin: $(KERNEL_BASE_OBJ) $(B)/k/userprogs-test.o $(B)/k/assets-kernel-test-core.o kernel/linker.ld
+	$(CC) -T kernel/linker.ld -o $@ -ffreestanding -O0 -nostdlib -fno-pie -no-pie \
+	      $(KERNEL_BASE_OBJ) $(B)/k/userprogs-test.o $(B)/k/assets-kernel-test-core.o -lgcc
+
+# Kernel crypto is hot (the store encrypts the whole saved tree): optimise it.
+$(B)/k/crypto/%.o: crypto/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(KCFLAGS) -O2 -c $< -o $@
 
 shusha.iso: $(B)/kernel.bin boot/grub/grub.cfg
 	rm -rf $(B)/iso && mkdir -p $(B)/iso/boot/grub $(B)/iso/EFI/BOOT

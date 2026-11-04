@@ -47,3 +47,22 @@ block_device_t *block_find(const char *name) {
     }
     return 0;
 }
+
+void block_serial_from_identify(char out[24], const uint16_t *identify) {
+    char raw[21];
+    int n = 0, start = 0, end;
+    for (int w = 10; w < 20; w++) {
+        raw[n++] = (char)(identify[w] >> 8);
+        raw[n++] = (char)(identify[w] & 0xff);
+    }
+    raw[20] = 0;
+    while (start < 20 && raw[start] == ' ') start++;
+    end = 20;
+    while (end > start && (raw[end - 1] == ' ' || raw[end - 1] == 0)) end--;
+    n = 0;
+    for (int i = start; i < end && n < 23; i++) {
+        char c = raw[i];
+        out[n++] = (c >= 0x21 && c <= 0x7e) ? c : '?';
+    }
+    out[n] = 0;
+}

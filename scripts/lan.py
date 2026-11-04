@@ -31,10 +31,14 @@ KEYS = {" ": "spc", "/": "slash", ".": "dot", "-": "minus", "\n": "ret", "\t": "
 
 
 class Lan:
-    def __init__(self, n, iso=os.environ.get("SHUSHA_LAN_ISO", os.path.join(ROOT, "lan.iso")), mcast="230.0.0.1:1234", mem="256M", pcap=()):
+    def __init__(self, n, iso=os.environ.get("SHUSHA_LAN_ISO", os.path.join(ROOT, "lan.iso")), mcast="230.0.0.1:1234", mem="256M", pcap=(),
+                 machines=None):
         """pcap: VM numbers whose network traffic is recorded to build/lan/vmK.pcap
-        (every VM receives the whole segment, so one capture sees all of it)."""
+        (every VM receives the whole segment, so one capture sees all of it).
+        machines: per-VM hardware, {k: {"disk": image, "serial": disk serial,
+        "uefi": True, "cdrom": False, "uuid": SMBIOS UUID, "mac": MAC}}."""
         self.n, self.iso, self.mcast, self.mem, self.pcap = n, iso, mcast, mem, set(pcap)
+        self.machines = machines or {}
         self.procs = {}
 
     def __enter__(self):
@@ -53,15 +57,51 @@ class Lan:
         for ext in ("log", "sock", "pcap"):
             if os.path.exists(self.path(k, ext)):
                 os.remove(self.path(k, ext))
-        cmd = ["qemu-system-x86_64", "-cpu", "max", "-m", self.mem, "-cdrom", self.iso,
+        m = self.machines.get(k, {})
+        cmd = ["qemu-system-x86_64", "-cpu", "max", "-m", self.mem,
                "-display", "none", "-no-reboot",
                "-serial", "file:" + self.path(k, "log"),
                "-monitor", "unix:%s,server,nowait" % self.path(k, "sock"),
-               "-netdev", "socket,id=n0,mcast=%s,localaddr=127.0.0.1" % self.mcast,
-               "-device", "e1000,netdev=n0,mac=52:54:00:12:00:%02x" % k]
+               "-netdev", self.netdev(m),
+               "-device", "e1000,netdev=n0,mac=%s" % m.get("mac", "52:54:00:12:00:%02x" % k)]
+        if m.get("cdrom", True):
+            cmd += ["-cdrom", m.get("iso", self.iso)]
+        if m.get("uefi"):
+            cmd += ["-bios", "/usr/share/ovmf/OVMF.fd"]
+        if m.get("uuid"):
+            cmd += ["-uuid", m["uuid"]]
+        if m.get("disk"):
+            cmd += ["-drive", "if=none,id=d0,file=%s,format=raw" % m["disk"],
+                    "-device", "ide-hd,drive=d0,bus=ide.0,serial=%s" % m.get("serial", "SHUSHA-DISK-%d" % k)]
         if k in self.pcap:
             cmd += ["-object", "filter-dump,id=f0,netdev=n0,file=" + self.path(k, "pcap")]
         self.procs[k] = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+
+    def netdev(self, m):
+        """The shared LAN segment, or ("nat": True) the machine alone behind
+        its own NAT router (QEMU user networking: DHCP gives 10.0.2.15, the
+        host's loopback is 10.0.2.2), optionally with a port forward
+        ("forward": host UDP port -> the workspace port 7100)."""
+        if not m.get("nat"):
+            return "socket,id=n0,mcast=%s,localaddr=127.0.0.1" % self.mcast
+        nd = "user,id=n0"
+        if m.get("forward"):
+            nd += ",hostfwd=udp:127.0.0.1:%d-:7100" % m["forward"]
+        return nd
+
+    def reboot(self, k, **hw):
+        """Power VM k off and boot it again, with hardware changes (see machines)."""
+        self.stop(k)
+        self.machines[k] = dict(self.machines.get(k, {}), **hw)
+        self.boot(k)
+
+    def wait_exit(self, k, timeout=60):
+        """Wait for VM k to power itself off or restart (QEMU runs with -no-reboot)."""
+        p = self.procs.get(k)
+        end = time.time() + timeout
+        while p and p.poll() is None and time.time() < end:
+            time.sleep(0.5)
+        return p is None or p.poll() is not None
 
     def stop(self, k=None):
         for j in ([k] if k else list(self.procs)):

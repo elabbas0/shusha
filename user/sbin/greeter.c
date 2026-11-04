@@ -18,7 +18,7 @@
 #define WANT_H 500
 #define MAXU   12
 
-enum { SC_SETUP, SC_KEY, SC_LOGIN, SC_RECOVER };
+enum { SC_SETUP, SC_KEY, SC_LOGIN, SC_RECOVER, SC_DISK };
 enum { F_NAME, F_PASS, F_PASS2, F_KEY, NF };
 
 static int win_w = WANT_W, win_h = WANT_H;
@@ -39,7 +39,11 @@ typedef struct {
 static hit_t hits[32];
 static int nhits;
 
-enum { A_FIELD = 1, A_USER, A_SUBMIT, A_FORGOT, A_BACK, A_CONTINUE };
+enum { A_FIELD = 1, A_USER, A_SUBMIT, A_FORGOT, A_BACK, A_CONTINUE, A_SKIP };
+
+/* The state store (kernel/fs/store.c): "none" in a live session,
+ * "locked" when the disk is bound to other hardware. */
+static char store_state[16];
 
 /* ---- authd ------------------------------------------------------------- */
 
@@ -165,6 +169,27 @@ static void submit(void) {
         screen_kind = SC_KEY;
         return;
     }
+    if (screen_kind == SC_DISK) {
+        if (!fields[F_KEY][0]) {
+            str_copy(error, "Enter the disk's recovery code.", sizeof(error));
+            return;
+        }
+        busy = 1;
+        render();
+        str_copy(data, fields[F_KEY], sizeof(data));
+        str_cat(data, "\n", sizeof(data));
+        auth("unlock-store", data, &status);
+        mem_wipe(data, sizeof(data));
+        mem_wipe(fields[F_KEY], sizeof(fields[F_KEY]));
+        busy = 0;
+        if (status || !str_starts(reply, "ok")) {
+            set_error_from_reply();
+            return;
+        }
+        str_copy(info, "Unlocked. Shusha restarts now to load it.", sizeof(info));
+        busy = 2;
+        return;
+    }
     /* sign in / unlock */
     if (!nusers) return;
     busy = 1;
@@ -255,7 +280,24 @@ static void render(void) {
     draw_icon(s, (win_w - ICON_SIZE) / 2, 22, ICON_WORKSPACE);
     y = 84;
 
-    if (screen_kind == SC_SETUP) {
+    if (screen_kind == SC_DISK) {
+        center(s, y, "This disk belongs to another machine", COL_TEXT, FONT_BOLD);
+        center(s, y + 24, "Its accounts and files stay encrypted: the hardware", COL_MUTED, FONT_SANS);
+        center(s, y + 42, "it was bound to has changed. Its recovery code opens it", COL_MUTED, FONT_SANS);
+        center(s, y + 60, "here, and binds it to this machine.", COL_MUTED, FONT_SANS);
+        field(s, x, y + 96, w, F_KEY, "Recovery code (XXXXX-XXXXX-XXXXX-XXXXX)", 0);
+        if (busy == 2) {
+            center(s, y + 176, info, COL_ACCENT_HI, FONT_BOLD);
+        } else {
+            button(s, x, y + 166, w, busy ? "Checking..." : "Unlock this disk", 1, A_SUBMIT);
+            {
+                const char *t = "Continue without it (nothing is saved)";
+                int tw = text_width(t);
+                draw_text(s, (win_w - tw) / 2, y + 216, t, hov((win_w - tw) / 2, y + 214, tw, 20) ? COL_ACCENT_HI : COL_MUTED);
+                add_hit((win_w - tw) / 2, y + 214, tw, 20, A_SKIP, 0);
+            }
+        }
+    } else if (screen_kind == SC_SETUP) {
         center(s, y, "Welcome to Shusha", COL_TEXT, FONT_BOLD);
         center(s, y + 22, "Create the administrator account for this machine.", COL_MUTED, FONT_SANS);
         field(s, x, y + 58, w, F_NAME, "Name (a-z, 0-9)", 0);
@@ -263,6 +305,11 @@ static void render(void) {
         field(s, x, y + 182, w, F_PASS2, "Repeat password", 1);
         button(s, x, y + 254, w, busy ? "Creating..." : "Create account", 1, A_SUBMIT);
         center(s, y + 302, "Stored only as an Argon2id hash with a machine key.", 0x5b6676, FONT_SANS);
+        if (str_eq(store_state, "none")) {
+            draw_round_fill(s, x, y + 330, w, 46, 8, 0x3a2f12);
+            center(s, y + 336, "Live session: nothing is saved until Shusha is", COL_WARN, FONT_SANS);
+            center(s, y + 354, "installed (menu at the top right, after signing in).", COL_WARN, FONT_SANS);
+        }
     } else if (screen_kind == SC_KEY) {
         center(s, y, "Your recovery key", COL_TEXT, FONT_BOLD);
         center(s, y + 24, "Write it down and keep it somewhere safe. It is shown", COL_MUTED, FONT_SANS);
@@ -323,6 +370,10 @@ static void perform(int a, int arg) {
         break;
     case A_BACK: screen_kind = SC_LOGIN; wipe_fields(); focus_f = F_PASS; break;
     case A_CONTINUE: after_key(); break;
+    case A_SKIP:
+        screen_kind = nusers ? SC_LOGIN : SC_SETUP;
+        focus_f = nusers ? F_PASS : F_NAME;
+        break;
     }
 }
 
@@ -360,6 +411,7 @@ static void key(uint32_t k) {
         if (k == '\n' || k == '\r') after_key();
         return;
     }
+    error[0] = '\0';   /* typing clears the last error; submitting may set a new one */
     if (k == '\n' || k == '\r') submit();
     else if (k == '\t') next_field();
     else if (k == '\b' || k == 127) {
@@ -368,7 +420,6 @@ static void key(uint32_t k) {
         f[len] = (char)k;
         f[len + 1] = '\0';
     }
-    error[0] = '\0';
 }
 
 int main(int argc, char **argv) {
@@ -383,6 +434,18 @@ int main(int argc, char **argv) {
     } else {
         screen_kind = nusers ? SC_LOGIN : SC_SETUP;
         focus_f = nusers ? F_PASS : F_NAME;
+        if (auth("store", 0, 0) > 0 && str_starts(reply, "state ")) {
+            int k = 0;
+            while (reply[6 + k] && reply[6 + k] != '\n' && k < 15) {
+                store_state[k] = reply[6 + k];
+                k++;
+            }
+            store_state[k] = '\0';
+        }
+        if (str_eq(store_state, "locked")) {
+            screen_kind = SC_DISK;
+            focus_f = F_KEY;
+        }
     }
     if (ui_open(lock_mode ? "Locked" : "Sign in", WANT_W, WANT_H) != 0) return 1;
     win_w = ui_surface()->w;

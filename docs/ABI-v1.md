@@ -60,5 +60,12 @@ Userspace networking (Shusha, no new numbers):
 - `/dev/netinfo` reads as text: `ip`, `mask`, `mac`.
 - `/dev/meminfo` reads as text: `free <frames>` and `total <frames>`,
   in 4 KiB frames (`scripts/reclaim-test.py` uses it).
+- `/dev/store` (docs/STORAGE.md): reading gives the state store's status
+  (`state none|unlocked|locked|damaged`, disk, generation, saved bytes,
+  hardware match). Root also sees `device` lines, `can-install`, and
+  `recovery <code>` right after an install. Writes are root-only commands:
+  `install <device>`, `unlock <code>`, `sync`, `forget`.
+- `SYS_SYNC` saves the tree to the state store if it changed (the kernel
+  no longer writes the disk on every file change). `SYS_POWER` saves first.
 - Without a DHCP server the kernel takes a link-local address,
   169.254.<mac[4]>.<mac[5]>/16.

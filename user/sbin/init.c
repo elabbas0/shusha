@@ -30,6 +30,7 @@ int main(int argc, char **argv) {
      * queue or port taken and exits. */
     if (sh_stat("/sbin/authd.app", &st) == 0) (void)sh_spawn("/sbin/authd.app");
     if (sh_stat("/sbin/workspaced.app", &st) == 0) (void)sh_spawn("/sbin/workspaced.app");
+    if (sh_stat("/sbin/syncd.app", &st) == 0) (void)sh_spawn("/sbin/syncd.app");
 
     pid = sh_spawn(target);
     if (pid < 0) {

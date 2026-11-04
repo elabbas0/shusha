@@ -64,9 +64,13 @@ tries every one of these calls as an ordinary user.
 
 ## Limits
 
-- **State is in RAM** on the live image. Accounts, like files, last until
-  reboot until disk persistence of ownership lands.
-- **The machine pepper is a random file**, not yet bound to the hardware
-  ID (planned with `keyd`).
+- **Saved only when installed.** On the live image accounts, like
+  files, last until power off. Once Shusha is installed (docs/STORAGE.md),
+  they are saved in the encrypted, hardware-bound state store, and every
+  account change is saved at once.
+- **The machine key is bound to the hardware, not to a password.** The
+  pepper lives inside the store, so a disk moved to another machine
+  yields nothing. But someone who knows two of the machine's hardware IDs
+  could open the store (docs/STORAGE.md, "What this protects").
 - **No encrypted home folders yet.** Homes are protected by permissions,
   not by a per-user key.

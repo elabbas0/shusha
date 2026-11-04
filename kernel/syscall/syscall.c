@@ -16,6 +16,7 @@
 #include "../fs/ntfs.h"
 #include "../fs/vfs.h"
 #include "../fs/persistfs.h"
+#include "../fs/store.h"
 #include "../ipc/shm.h"
 #include "../ipc/msgq.h"
 #include "../proc/sched.h"
@@ -233,6 +234,10 @@ static uint64_t control_write(process_t *proc, int kind, const char *buf, uint64
         }
         return size;
     }
+    if (kind == DEV_CTL_STORE) {
+        /* Root only: install, unlock, sync, forget (kernel/fs/store.c). */
+        return store_command(buf, uid == 0) == 0 ? size : (uint64_t)-1;
+    }
     if (kind == DEV_CTL_KILLUID) {
         /* Root only: ends a user's session (logout).  Never root itself. */
         uint64_t victim = parse_dec(&p);
@@ -279,6 +284,13 @@ static long read_netinfo(process_t *proc, const char *path, char *buf, uint64_t 
     if (n > cap) n = cap;
     for (uint64_t i = 0; i < n; i++) buf[i] = tmp[i];
     return (long)n;
+}
+
+/* /dev/store: the state store's status (root also sees disks and a
+ * fresh recovery code). */
+static long read_store(process_t *proc, const char *path, char *buf, uint64_t cap) {
+    if (dev_control_kind(vfs_resolve(cwd_of(proc), path)) != DEV_CTL_STORE) return -1;
+    return store_status_text(buf, cap, proc->ex_uid == 0);
 }
 
 /* /dev/meminfo: "free <frames>\ntotal <frames>\n" (4 KiB frames). */
@@ -371,6 +383,7 @@ static uint64_t sys_vfs_read(const char *path, char *buf, uint64_t cap) {
         if (n < 0) n = read_dev_uid(proc, path, buf, cap - 1);
         if (n < 0) n = read_netinfo(proc, path, buf, cap - 1);
         if (n < 0) n = read_meminfo(proc, path, buf, cap - 1);
+        if (n < 0) n = read_store(proc, path, buf, cap - 1);
         if (n >= 0) {
             buf[n] = '\0';
             return (uint64_t)n;
@@ -463,6 +476,7 @@ static uint64_t sys_vfs_read_at(const char *path, uint64_t offset, char *buf, ui
         if (n < 0 && offset == 0) n = read_dev_uid(proc, path, buf, cap);
         if (n < 0 && offset == 0) n = read_netinfo(proc, path, buf, cap);
         if (n < 0 && offset == 0) n = read_meminfo(proc, path, buf, cap);
+        if (n < 0 && offset == 0) n = read_store(proc, path, buf, cap);
         if (n < 0 && dev_is_udp(vfs_resolve(cwd_of(proc), path))) {
             n = udp_recv(proc->pid, (uint8_t *)buf, cap);
             if (n < 0) return (uint64_t)-1;
@@ -975,7 +989,8 @@ static uint64_t sys_gpu_cursor(int x, int y, const uint32_t *image, int w, int h
 }
 
 static uint64_t sys_power(uint64_t action) {
-    /* 0 = shutdown, 1 = reboot.  Neither returns. */
+    /* 0 = shutdown, 1 = reboot.  Neither returns.  Save first. */
+    (void)vfs_sync();
     if (action == 1) {
         power_reboot();
     } else {

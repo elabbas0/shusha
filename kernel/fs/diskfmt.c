@@ -6,6 +6,7 @@
 #include "exfat.h"
 #include "ntfs.h"
 #include "persistfs.h"
+#include "store.h"
 #include "../memory/heap.h"
 
 #define DISK_SECTOR_SIZE 512U
@@ -549,12 +550,52 @@ static int diskfmt_layout_icda(block_device_t *dev) {
     return rc;
 }
 
+/* Shusha disk: GPT with a 64 MiB EFI system partition (FAT32: GRUB and
+ * the kernel) and the rest as the raw, encrypted state partition (see
+ * kernel/fs/store.c).  The caller makes sure the device is not in use. */
+int diskfmt_layout_shusha(uint32_t device_index, const uint8_t state_type_guid[16], uint32_t salt) {
+    block_device_t *dev = block_get(device_index);
+    uint32_t efi_start = DISK_ALIGN_LBA, efi_sectors = 131072U;   /* 64 MiB */
+    uint64_t state_start, state_end;
+    gpt_entry_t *entries;
+    uint8_t role_guid[16];
+    int rc;
+
+    if (!dev || !dev->write || dev->sector_size != DISK_SECTOR_SIZE) return -21;
+    /* room for GPT backups at the end and at least 128 MiB of state */
+    if (dev->sector_count < (uint64_t)efi_start + efi_sectors + 262144U + 2048U) return -22;
+    state_start = (uint64_t)efi_start + efi_sectors;
+    state_end = (dev->sector_count - GPT_ENTRIES_SECTORS - 2U) & ~7ULL;
+
+    entries = (gpt_entry_t *)kmalloc(sizeof(gpt_entry_t) * GPT_ENTRY_COUNT);
+    if (!entries) return -25;
+    zero_bytes((uint8_t *)entries, sizeof(gpt_entry_t) * GPT_ENTRY_COUNT);
+    partition_role_guid(PARTITION_ROLE_EFI, role_guid, 0);
+    copy_bytes((char *)entries[0].type_guid, (const char *)role_guid, sizeof(role_guid));
+    fill_guid(entries[0].unique_guid, 0x5300U ^ salt);
+    entries[0].first_lba = efi_start;
+    entries[0].last_lba = (uint64_t)efi_start + efi_sectors - 1U;
+    utf16_name(entries[0].name, "Shusha EFI");
+    copy_bytes((char *)entries[1].type_guid, (const char *)state_type_guid, 16);
+    fill_guid(entries[1].unique_guid, 0x5301U ^ salt);
+    entries[1].first_lba = state_start;
+    entries[1].last_lba = state_end - 1U;
+    utf16_name(entries[1].name, "Shusha State");
+    rc = write_gpt_layout(dev, entries, 2);
+    if (rc == 0) rc = diskfmt_format_fat32_partition(dev, efi_start, efi_sectors) == 0 ? 0 : -23;
+    kfree(entries);
+    if (rc != 0) return rc;
+    (void)partition_scan_all();
+    return 0;
+}
+
 int diskfmt_format_device(uint32_t device_index, diskfmt_fs_t fs_type) {
     block_device_t *dev = block_get(device_index);
     int runtime_device = persistfs_active_device();
     int rc;
     if (!dev || !dev->write) return -10;
     if (runtime_device >= 0 && device_index == (uint32_t)runtime_device) return -11;
+    if (store_device() >= 0 && device_index == (uint32_t)store_device()) return -11;
 
     if (fs_type == DISKFMT_FS_FAT32) {
         rc = diskfmt_format_fat32(dev);
@@ -590,6 +631,7 @@ int diskfmt_format_partition(uint32_t partition_index, diskfmt_fs_t fs_type) {
 
     if (!part || !part->device || !part->device->write) return -10;
     if (runtime_device >= 0 && part->device == block_get((uint32_t)runtime_device)) return -11;
+    if (store_device() >= 0 && part->device == block_get((uint32_t)store_device())) return -11;
 
     if (fs_type == DISKFMT_FS_FAT32) {
         rc = diskfmt_format_fat32_partition(part->device, (uint32_t)part->start_lba, (uint32_t)part->sector_count);

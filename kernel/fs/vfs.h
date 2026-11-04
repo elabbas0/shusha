@@ -33,6 +33,8 @@ vfs_node_t *vfs_root(void);
 int vfs_seed_readonly(const char *path, const char *data, uint64_t size);
 void vfs_set_sync_hook(int (*hook)(void));
 int vfs_sync(void);
+/* Counts every change to the tree (the store skips unchanged syncs). */
+uint64_t vfs_changes(void);
 vfs_node_t *vfs_resolve(vfs_node_t *cwd, const char *path);
 int vfs_getcwd(vfs_node_t *node, char *buf, size_t size);
 int vfs_mkdir(vfs_node_t *cwd, const char *path);

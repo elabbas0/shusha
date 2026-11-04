@@ -240,6 +240,7 @@ static int ahci_identify(ahci_device_t *dev) {
     }
     if (sectors == 0) return -1;
     dev->sector_count = sectors;
+    block_serial_from_identify(dev->block.serial, id);
     return 0;
 }
 

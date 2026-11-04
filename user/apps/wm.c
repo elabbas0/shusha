@@ -135,6 +135,15 @@ static void session_spawn(const char *path);
 static void session_lock(void);
 static void session_logout(void);
 
+/* No installed disk in use (kernel/fs/store.c): nothing is kept. */
+static int live_session(void) {
+    char t[64];
+    long n = sh_read("/dev/store", t, sizeof(t) - 1);
+    if (n <= 0) return 0;
+    t[n] = 0;
+    return str_starts(t, "state none");
+}
+
 static int in_mode(const win_t *w) {
     return smode == S_SESSION ? w->uid != GREETER_UID : w->uid == GREETER_UID;
 }
@@ -1013,22 +1022,25 @@ static void mouse_event(const sh_mouse_t *e) {
             damage(menu_bounds(&power_menu, power_menu_x(), PANEL_H + 4));
             damage(power_rect());
             power_open = 0;
-            if (i >= 0 && power_menu.count == 5 && i < 3) {
+            if (i >= 0 && power_menu.count == 6 && i < 4) {
                 if (i == 0) dock_click_app("Accounts", "/apps/accounts.app");
-                else if (i == 1) session_lock();
+                else if (i == 1) dock_click_app(power_menu.items[1], "/apps/installer.app");
+                else if (i == 2) session_lock();
                 else session_logout();
             } else if (i >= 0) {
-                i -= power_menu.count == 5 ? 3 : 0;
+                i -= power_menu.count == 6 ? 4 : 0;
                 (void)sh_sync();
                 (void)sh_power(i == 0 ? 1 : 0);
             }
             return;
         }
         if (hover_kind == HV_POWER && (pressed & UI_BTN_LEFT)) {
-            static const char *const session_items[] = { "Accounts", "Lock", "Log out", "Restart", "Power off" };
+            static const char *session_items[] = { "Accounts", "Storage", "Lock", "Log out", "Restart", "Power off" };
             static const char *const login_items[] = { "Restart", "Power off" };
-            int n = smode == S_SESSION ? 5 : 2;
-            for (int k = 0; k < n; k++) power_menu.items[k] = n == 5 ? session_items[k] : login_items[k];
+            int n = smode == S_SESSION ? 6 : 2;
+            /* A live session saves nothing: offer to install instead. */
+            session_items[1] = live_session() ? "Install Shusha" : "Storage";
+            for (int k = 0; k < n; k++) power_menu.items[k] = n == 6 ? session_items[k] : login_items[k];
             power_menu.count = n;
             power_open = 1;
             damage(menu_bounds(&power_menu, power_menu_x(), PANEL_H + 4));

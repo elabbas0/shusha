@@ -83,7 +83,8 @@ os.makedirs(OUT, exist_ok=True)
 # content (24 + 36n, 85 + 30n) for the n-th window of a session, moved up
 # to y=75 if they would reach the dock; Qələm is wide and sits at x=88.
 DOCK = {"explorer": (550, 754), "terminal": (610, 754), "workspace": (670, 754), "qalam": (730, 754)}
-MENU = {"accounts": (1200, 52), "lock": (1200, 78), "logout": (1200, 104)}
+MENU = {"accounts": (1200, 52), "storage": (1200, 78), "lock": (1200, 104), "logout": (1200, 130),
+        "restart": (1200, 156), "poweroff": (1200, 182)}
 POWER = (1256, 15)
 GREETER = (410, 166)            # login window content origin
 PARK = (420, 790)
