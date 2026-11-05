@@ -246,3 +246,13 @@ clean:
 	rm -rf $(B) shusha.iso lan.iso
 
 -include $(shell find $(B) -name '*.d' 2>/dev/null)
+
+# ---- in-browser demo (web/) --------------------------------------------------
+# Kernel for the browser demo: console mirrored to serial so the page can pick
+# up invite codes, gzipped for download; plus the Multiboot shim QEMU's
+# -kernel loader starts it with.  The emulator itself: sh web/build-qemu.sh.
+.PHONY: web-kernel
+web-kernel:
+	$(MAKE) B=build/web SERIAL_MIRROR=1 build/web/kernel.bin
+	gzip -9 -n -c build/web/kernel.bin > web/kernel.bin.gz
+	$(MAKE) -C web/shim

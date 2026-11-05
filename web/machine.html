@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Shusha machine</title>
+  <!-- GitHub Pages cannot send COOP/COEP headers; this worker adds them so
+       SharedArrayBuffer (needed by the threaded emulator) is available. -->
+  <script src="coi-serviceworker.min.js"></script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="machine">
+    <div class="head">
+      <h1 id="title">Shusha machine</h1>
+      <span id="addr" class="muted"></span>
+      <a class="muted back" href="./">All machines</a>
+    </div>
+    <div class="bar">
+      <button id="start">Boot Shusha</button>
+      <button id="kbd" class="secondary" aria-pressed="false" hidden>Keyboard</button>
+      <button id="type-invite" class="secondary" hidden></button>
+      <span id="status" class="muted">Downloads about 15 MB.</span>
+      <span id="net" class="muted net"></span>
+    </div>
+    <div id="invite" class="invite" hidden>
+      <span>Invite code from this machine:</span>
+      <code></code>
+      <button id="copy-invite" class="secondary small">Copy</button>
+    </div>
+    <div class="screen">
+      <canvas id="screen" width="1280" height="800" tabindex="0"></canvas>
+      <textarea id="softkbd" aria-label="Type into Shusha" autocomplete="off"
+                autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
+    </div>
+    <details class="console">
+      <summary>Serial console</summary>
+      <pre id="log"></pre>
+    </details>
+  </main>
+  <script type="module" src="shusha.js"></script>
+</body>
+</html>

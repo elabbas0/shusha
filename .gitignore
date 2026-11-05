@@ -59,3 +59,8 @@ build/
 shusha.iso
 __pycache__/
 lan.iso
+
+# Browser demo build output (make web-kernel, web/build-qemu.sh)
+web/kernel.bin.gz
+web/qemu/
+web/.qemu-wasm/
