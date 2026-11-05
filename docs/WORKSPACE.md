@@ -324,7 +324,7 @@ sync`.
 
 ### Over the internet
 
-Members should not need to share a LAN. `scripts/internet-test.py` puts each
+Members do not need to share a LAN. `scripts/internet-test.py` puts each
 of four machines alone behind its own NAT router. DHCP gives all four the
 same private address, and nothing can reach them from outside except one
 port forward.
@@ -354,10 +354,9 @@ port forward.
 - **With the introducer gone,** members that reach each other directly
   carry on. A relayed member needs some relay online.
 
-**Status: written, not yet run.** `scripts/internet-test.py` is meant to check the
-following, but it has not passed yet, so none of this is confirmed:
+All 22 checks pass ([transcript](poc/internet-test.txt)):
 
-| Check (`scripts/internet-test.py`) | Intended result |
+| Check (`scripts/internet-test.py`) | Result |
 |---|---|
 | Four machines, each behind its own NAT, DHCP | all 10.0.2.15 |
 | Joins through the admin's public endpoint | ranks 1, 2, 3 |

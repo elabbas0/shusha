@@ -1,0 +1,149 @@
+4 machines up, each behind its own NAT
+
+[behind NAT]
+  vm1$ cat /dev/netinfo
+        ip 10.0.2.15
+        mask 255.255.255.0
+        mac 52:54:00:12:00:01
+        root@shusha:
+  vm2$ cat /dev/netinfo
+        ip 10.0.2.15
+        mask 255.255.255.0
+        mac 52:54:00:12:00:02
+        root@shusha:
+  vm3$ cat /dev/netinfo
+        ip 10.0.2.15
+        mask 255.255.255.0
+        mac 52:54:00:12:00:03
+        root@shusha:
+  vm4$ cat /dev/netinfo
+        ip 10.0.2.15
+        mask 255.255.255.0
+        mac 52:54:00:12:00:04
+        root@shusha:
+  ok    DHCP gives every machine the same private address, 10.0.2.15
+
+[create, with a public endpoint]
+  vm1$ ws create net-team
+        workspaced: Created workspace net-team
+        created workspace net-team - you are rank 0 (admin)
+        root@shusha:
+  ok    vm1 creates the workspace
+  vm1$ ws endpoint 10.0.2.2:17312
+        public endpoint 10.0.2.2:17312
+        root@shusha:
+  ok    vm1 sets its public endpoint (its router's port forward)
+  vm3$ ws network relay
+        network: relay only (members are reached through a relay)
+        root@shusha:
+  ok    vm3 is behind a strict NAT: relay only
+  vm1$ ws invite
+        invite code (single use):
+        shubiaaeavain4bzcdtvw22x427xm6eh64nvuqcpqcj4ckectll
+        root@shusha:
+  vm1$ ws invite
+        invite code (single use):
+        shubiaaeavain4bzcdtvw22x47rgxiyquu7bgprrlw3ktbijkyv
+        root@shusha:
+  vm1$ ws invite
+        invite code (single use):
+        shubiaaeavain4bzcdtvw22x4yi6643sjpfcb6cmzpm6xalgqta
+        root@shusha:
+
+[join over the internet]
+  vm2$ ws join shubiaaeavain4bzcdtvw22x427xm6eh64nvuqcpqcj4ckectll user2
+        workspaced: admin is online
+        workspaced: Joined workspace net-team
+        joined workspace net-team as rank 1
+        root@shusha:
+  ok    vm2 joins through vm1's public endpoint
+  vm3$ ws join shubiaaeavain4bzcdtvw22x47rgxiyquu7bgprrlw3ktbijkyv user3
+        workspaced: admin is online
+        workspaced: Joined workspace net-team
+        joined workspace net-team as rank 2
+        root@shusha:
+  ok    vm3 joins through vm1's public endpoint
+  vm4$ ws join shubiaaeavain4bzcdtvw22x4yi6643sjpfcb6cmzpm6xalgqta user4
+        workspaced: admin is online
+        workspaced: Joined workspace net-team
+        joined workspace net-team as rank 3
+        root@shusha:
+  ok    vm4 joins through vm1's public endpoint
+
+[paths]
+  vm2$ ws members
+          rank 0  admin  direct 10.0.2.2:17312  key dd97ca6a2305
+          rank 1  user2  this machine  key 24d14ed5d3f3  (you)
+          rank 2  user3  via admin (relay)  key 3dcf597c4d04
+          rank 3  user4  direct 10.0.2.2:57317  key b95b28fc1106
+        root@shusha:
+  ok    vm2 reaches vm1 directly at its public endpoint
+  ok    vm2 reaches vm4 directly through both NATs (introduced by vm1)
+  ok    vm2 reaches strict vm3 through the relay
+  vm3$ ws members
+          rank 0  admin  direct 10.0.2.2:17312  key dd97ca6a2305
+          rank 1  user2  via admin (relay)  key 24d14ed5d3f3
+          rank 2  user3  this machine, relay only  key 3dcf597c4d04  (you)
+          rank 3  user4  via admin (relay)  key b95b28fc1106
+        root@shusha:
+  ok    vm3 reaches both through the relay
+  vm4$ ws members
+          rank 0  admin  direct 10.0.2.2:17312  key dd97ca6a2305
+          rank 1  user2  direct 10.0.2.2:51647  key 24d14ed5d3f3
+          rank 2  user3  via admin (relay)  key 3dcf597c4d04
+          rank 3  user4  this machine  key b95b28fc1106  (you)
+        root@shusha:
+  ok    vm4 reaches vm2 directly
+
+[files over every path]
+  vm3$ ws put /home/strict.txt
+        workspaced: You shared strict.txt
+        shared strict.txt (25 bytes, encrypted)
+        replicated to 3 of 3 member(s)
+        root@shusha:
+  ok    strict vm3 shares a file to all 3 members (one direct, two relayed)
+  vm2$ ws cat strict.txt
+        from-behind-a-strict-nat
+        root@shusha:
+  ok    vm2 (rank 1) reads it, relayed
+  vm1$ ws cat strict.txt
+        from-behind-a-strict-nat
+        root@shusha:
+  ok    vm1 (admin) reads it
+  vm1$ ws network
+        network: direct (relays are used only when needed)
+        relayed for others: 181 frames
+        root@shusha:
+  ok    vm1 relayed frames it cannot read (181)
+  vm4$ ws put /home/nat.txt
+        workspaced: You shared nat.txt
+        shared nat.txt (18 bytes, encrypted)
+        replicated to 3 of 3 member(s)
+        root@shusha:
+  ok    vm4 shares a file to everyone
+  vm2$ ws cat nat.txt
+        nat-to-nat-direct
+        root@shusha:
+  ok    vm2 reads vm4's file
+
+[the admin powered off]
+  vm2$ ws members
+          rank 0  admin  offline  key dd97ca6a2305
+          rank 1  user2  this machine  key 24d14ed5d3f3  (you)
+          rank 2  user3  offline  key 3dcf597c4d04
+          rank 3  user4  direct 10.0.2.2:57317  key b95b28fc1106
+        root@shusha:
+  ok    vm2 sees vm1 offline
+  ok    vm2 and vm4 stay connected directly
+  vm4$ ws put /home/after.txt
+        workspaced: You shared after.txt
+        shared after.txt (30 bytes, encrypted)
+        replicated to 1 of 3 member(s) - the rest pick it up on their next sync
+        root@shusha:
+  ok    vm4 shares a file with the admin offline
+  vm2$ ws cat after.txt
+        shared-with-the-admin-offline
+        root@shusha:
+  ok    vm2 reads it: NAT to NAT, no admin, no relay
+
+PASS: 0 failure(s)
