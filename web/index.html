@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Shusha network lab</title>
+  <!-- GitHub Pages cannot send COOP/COEP headers; this worker adds them so
+       SharedArrayBuffer (needed by the threaded emulator) is available. -->
+  <script src="coi-serviceworker.min.js"></script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <h1>Shusha network lab</h1>
+    <p class="lede">Shusha machines running in your browser, each an x86-64 PC emulated by
+      QEMU compiled to WebAssembly. They share one virtual Ethernet segment, so the
+      Workspace, its encrypted channels and co-editing in Qələm work between them.
+      Nothing leaves your browser.</p>
+
+    <div class="bar">
+      <button id="add">Open a machine</button>
+      <span class="muted">Each machine opens in its own window. Open two or three, then arrange them side by side.
+        Each needs about 600 MB of memory and one CPU core.</span>
+    </div>
+
+    <h2>Machines on this network</h2>
+    <ul id="machines" class="machines"></ul>
+    <div id="empty" class="empty">No machines are running yet. Press <em>Open a machine</em> (twice, for two).</div>
+
+    <div id="lab-invite" class="invite" hidden>
+      <span>Latest invite, from <span class="from"></span>:</span>
+      <code></code>
+      <button id="lab-copy" class="secondary small">Copy</button>
+    </div>
+
+    <h2>Try the Workspace between machines</h2>
+    <ol class="steps">
+      <li>On each machine, create the administrator account (any name, a password of 8+ characters).
+        Each machine is a separate PC with its own keys. This is a live session: reloading the page wipes it.</li>
+      <li>On machine 1, open the Workspace app from the dock (the purple icon), create a workspace, then press
+        <em>Invite someone</em>. The invite code appears above.</li>
+      <li>On machine 2, open the Workspace app, click into the invite code field, and press
+        <em>Type machine 1's invite</em> on machine 2's toolbar (or copy it and paste with Ctrl+V into its screen).
+        Then enter a name and press Join.</li>
+      <li>Open Qələm on either machine, write something, and save it into the workspace. The other
+        machine receives it. Ranks decide who may read or edit without asking.</li>
+      <li>Type a word from your file into <em>Is this text on the wire?</em> below. It should never be
+        found, because everything between machines is end-to-end encrypted.</li>
+    </ol>
+
+    <h2>The wire</h2>
+    <div class="wire">
+      <div class="tools">
+        <form id="search-form">
+          <input id="search" placeholder="Is this text on the wire? e.g. a file name or a sentence you wrote"
+                 aria-label="Text to look for in captured network traffic">
+          <button type="submit">Search</button>
+        </form>
+        <button id="wire-pause" class="secondary" aria-pressed="false">Pause</button>
+      </div>
+      <p id="search-result"></p>
+      <p id="wire-stats" class="muted">No traffic yet.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Time</th><th>Sent by</th><th>Proto</th><th>Source</th><th>Destination</th><th>Bytes</th><th>What</th><th>First payload bytes</th></tr></thead>
+          <tbody id="wire-rows"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <p class="muted" style="margin-top:24px">Every machine window or tab of this site in this browser joins the same network; machines in other browsers or on other computers do not.
+      Source: <a href="https://github.com/elabbas0/shusha">elabbas0/shusha</a> (<code>web/</code>).</p>
+  </main>
+  <script type="module" src="lab.js"></script>
+</body>
+</html>

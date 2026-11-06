@@ -1,0 +1,575 @@
+diff --git a/include/glib-compat.h b/include/glib-compat.h
+index 43a562974d..affddcd4c1 100644
+--- a/include/glib-compat.h
++++ b/include/glib-compat.h
+@@ -151,4 +151,31 @@ qemu_g_test_slow(void)
+ #define G_NORETURN G_GNUC_NORETURN
+ #endif
+ 
++#ifdef __EMSCRIPTEN__
++/*
++ * glib calls a GCompareFunc through a GCompareDataFunc pointer with an extra
++ * argument.  Native ABIs tolerate that; WebAssembly traps on the signature
++ * mismatch.  Route every two-argument comparator through a trampoline.
++ */
++static inline gint qemu_wasm_cmp_tramp(gconstpointer a, gconstpointer b,
++                                       gpointer f)
++{
++    return ((GCompareFunc)f)(a, b);
++}
++#define g_slist_sort(l, f) \
++    g_slist_sort_with_data((l), qemu_wasm_cmp_tramp, (gpointer)(f))
++#define g_list_sort(l, f) \
++    g_list_sort_with_data((l), qemu_wasm_cmp_tramp, (gpointer)(f))
++#define g_slist_insert_sorted(l, d, f) \
++    g_slist_insert_sorted_with_data((l), (d), qemu_wasm_cmp_tramp, (gpointer)(f))
++#define g_list_insert_sorted(l, d, f) \
++    g_list_insert_sorted_with_data((l), (d), qemu_wasm_cmp_tramp, (gpointer)(f))
++#define g_array_sort(a, f) \
++    g_array_sort_with_data((a), qemu_wasm_cmp_tramp, (gpointer)(f))
++#define g_ptr_array_sort(a, f) \
++    g_ptr_array_sort_with_data((a), qemu_wasm_cmp_tramp, (gpointer)(f))
++#define g_tree_new(f) \
++    g_tree_new_with_data(qemu_wasm_cmp_tramp, (gpointer)(f))
++#endif
++
+ #endif
+diff --git a/net/browser.c b/net/browser.c
+new file mode 100644
+index 0000000000..2c1df4e08c
+--- /dev/null
++++ b/net/browser.c
+@@ -0,0 +1,115 @@
++/*
++ * Browser network backend for QEMU built with Emscripten.
++ *
++ * Ethernet frames go to and from the page through two rings of fixed-size
++ * slots in shared memory.  Frames the guest sends are written to the TX ring
++ * and the page is told to drain it; the page puts frames from other
++ * instances (a BroadcastChannel acting as an Ethernet hub) in the RX ring,
++ * and a timer on the QEMU main loop drains that into the guest NIC.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/atomic.h"
++#include "qemu/timer.h"
++#include "qapi/error.h"
++#include "net/net.h"
++#include "clients.h"
++
++#ifdef __EMSCRIPTEN__
++#include <emscripten.h>
++#endif
++
++#define BROWSER_SLOTS     256
++#define BROWSER_SLOT_SIZE 2048      /* int32 length + frame (<= 2044 bytes) */
++#define BROWSER_POLL_MS   2
++
++/* [0] tx head (we write) [1] tx tail (page) [2] rx head (page) [3] rx tail (we) */
++static int32_t browser_shared[4];
++static uint8_t browser_tx[BROWSER_SLOTS * BROWSER_SLOT_SIZE];
++static uint8_t browser_rx[BROWSER_SLOTS * BROWSER_SLOT_SIZE];
++
++typedef struct BrowserNetState {
++    NetClientState nc;
++    QEMUTimer *timer;
++} BrowserNetState;
++
++static ssize_t browser_receive(NetClientState *nc, const uint8_t *buf,
++                               size_t size)
++{
++    int32_t head = qatomic_read(&browser_shared[0]);
++    int32_t tail = qatomic_load_acquire(&browser_shared[1]);
++
++    if (size > BROWSER_SLOT_SIZE - 4 || head - tail >= BROWSER_SLOTS) {
++        return size;            /* too big, or the page is behind: drop */
++    }
++    uint8_t *slot = &browser_tx[(head % BROWSER_SLOTS) * BROWSER_SLOT_SIZE];
++    *(int32_t *)slot = (int32_t)size;
++    memcpy(slot + 4, buf, size);
++    qatomic_store_release(&browser_shared[0], head + 1);
++#ifdef __EMSCRIPTEN__
++    MAIN_THREAD_ASYNC_EM_ASM({
++        if (Module.netTx) {
++            Module.netTx();
++        }
++    });
++#endif
++    return size;
++}
++
++static void browser_poll(void *opaque)
++{
++    BrowserNetState *s = opaque;
++    int32_t head = qatomic_load_acquire(&browser_shared[2]);
++    int32_t tail = qatomic_read(&browser_shared[3]);
++
++    while (tail != head && qemu_can_send_packet(&s->nc)) {
++        uint8_t *slot = &browser_rx[(tail % BROWSER_SLOTS) * BROWSER_SLOT_SIZE];
++        int32_t len = *(int32_t *)slot;
++        if (len > 0 && len <= BROWSER_SLOT_SIZE - 4) {
++            qemu_send_packet(&s->nc, slot + 4, len);
++        }
++        tail++;
++    }
++    qatomic_store_release(&browser_shared[3], tail);
++    timer_mod(s->timer, qemu_clock_get_ms(QEMU_CLOCK_REALTIME) + BROWSER_POLL_MS);
++}
++
++static void browser_cleanup(NetClientState *nc)
++{
++    BrowserNetState *s = DO_UPCAST(BrowserNetState, nc, nc);
++    if (s->timer) {
++        timer_free(s->timer);
++        s->timer = NULL;
++    }
++}
++
++static NetClientInfo net_browser_info = {
++    .type = NET_CLIENT_DRIVER_BROWSER,
++    .size = sizeof(BrowserNetState),
++    .receive = browser_receive,
++    .cleanup = browser_cleanup,
++};
++
++int net_init_browser(const Netdev *netdev, const char *name,
++                     NetClientState *peer, Error **errp)
++{
++    NetClientState *nc;
++    BrowserNetState *s;
++
++    assert(netdev->type == NET_CLIENT_DRIVER_BROWSER);
++    nc = qemu_new_net_client(&net_browser_info, peer, "browser", name);
++    s = DO_UPCAST(BrowserNetState, nc, nc);
++    qemu_set_info_str(nc, "browser: page rings");
++    s->timer = timer_new_ms(QEMU_CLOCK_REALTIME, browser_poll, s);
++    timer_mod(s->timer, qemu_clock_get_ms(QEMU_CLOCK_REALTIME) + BROWSER_POLL_MS);
++#ifdef __EMSCRIPTEN__
++    MAIN_THREAD_ASYNC_EM_ASM({
++        if (Module.netInit) {
++            Module.netInit($0, $1, $2, $3, $4);
++        }
++    }, browser_shared, browser_tx, browser_rx, BROWSER_SLOTS, BROWSER_SLOT_SIZE);
++#endif
++    return 0;
++}
+diff --git a/net/clients.h b/net/clients.h
+index be53794582..c9a6e35528 100644
+--- a/net/clients.h
++++ b/net/clients.h
+@@ -34,6 +34,9 @@ int net_init_slirp(const Netdev *netdev, const char *name,
+                    NetClientState *peer, Error **errp);
+ #endif
+ 
++int net_init_browser(const Netdev *netdev, const char *name,
++                     NetClientState *peer, Error **errp);
++
+ int net_init_hubport(const Netdev *netdev, const char *name,
+                      NetClientState *peer, Error **errp);
+ 
+diff --git a/net/meson.build b/net/meson.build
+index ce99bd4447..3426fbd7b2 100644
+--- a/net/meson.build
++++ b/net/meson.build
+@@ -1,5 +1,6 @@
+ system_ss.add(files(
+   'announce.c',
++  'browser.c',
+   'checksum.c',
+   'dump.c',
+   'eth.c',
+diff --git a/net/net.c b/net/net.c
+index 0520bc1681..f001248ab1 100644
+--- a/net/net.c
++++ b/net/net.c
+@@ -1113,6 +1113,7 @@ static int (* const net_client_init_fun[NET_CLIENT_DRIVER__MAX])(
+         [NET_CLIENT_DRIVER_BRIDGE]    = net_init_bridge,
+ #endif
+         [NET_CLIENT_DRIVER_HUBPORT]   = net_init_hubport,
++        [NET_CLIENT_DRIVER_BROWSER]   = net_init_browser,
+ #ifdef CONFIG_VHOST_NET_USER
+         [NET_CLIENT_DRIVER_VHOST_USER] = net_init_vhost_user,
+ #endif
+diff --git a/qapi/net.json b/qapi/net.json
+index 8095b68fa8..608dbd3a1f 100644
+--- a/qapi/net.json
++++ b/qapi/net.json
+@@ -370,6 +370,19 @@
+     '*br':     'str',
+     '*helper': 'str' } }
+ 
++##
++# @NetdevBrowserOptions:
++#
++# Exchange Ethernet frames with the web page (Emscripten builds).
++#
++# @channel: name of the page-side network; the page decides what it
++#     means.
++#
++# Since: 8.2
++##
++{ 'struct': 'NetdevBrowserOptions',
++  'data': { '*channel': 'str' } }
++
+ ##
+ # @NetdevHubPortOptions:
+ #
+@@ -697,13 +710,14 @@
+ # @stream: since 7.2
+ # @dgram: since 7.2
+ # @af-xdp: since 8.2
++# @browser: since 8.2
+ #
+ # Since: 2.7
+ ##
+ { 'enum': 'NetClientDriver',
+   'data': [ 'none', 'nic', 'user', 'tap', 'l2tpv3', 'socket', 'stream',
+             'dgram', 'vde', 'bridge', 'hubport', 'netmap', 'vhost-user',
+-            'vhost-vdpa',
++            'vhost-vdpa', 'browser',
+             { 'name': 'af-xdp', 'if': 'CONFIG_AF_XDP' },
+             { 'name': 'vmnet-host', 'if': 'CONFIG_VMNET' },
+             { 'name': 'vmnet-shared', 'if': 'CONFIG_VMNET' },
+@@ -739,6 +753,7 @@
+                   'if': 'CONFIG_AF_XDP' },
+     'vhost-user': 'NetdevVhostUserOptions',
+     'vhost-vdpa': 'NetdevVhostVDPAOptions',
++    'browser':  'NetdevBrowserOptions',
+     'vmnet-host': { 'type': 'NetdevVmnetHostOptions',
+                     'if': 'CONFIG_VMNET' },
+     'vmnet-shared': { 'type': 'NetdevVmnetSharedOptions',
+diff --git a/qapi/ui.json b/qapi/ui.json
+index a0158baf23..f3a3ba22b1 100644
+--- a/qapi/ui.json
++++ b/qapi/ui.json
+@@ -1482,6 +1482,9 @@
+ #
+ # @dbus: Start a D-Bus service for the display.  (Since 7.0)
+ #
++# @canvas: Draw into an HTML canvas when built with Emscripten.
++#     (Since 8.2)
++#
+ # Since: 2.12
+ ##
+ { 'enum'    : 'DisplayType',
+@@ -1494,7 +1497,8 @@
+     { 'name': 'curses', 'if': 'CONFIG_CURSES' },
+     { 'name': 'cocoa', 'if': 'CONFIG_COCOA' },
+     { 'name': 'spice-app', 'if': 'CONFIG_SPICE' },
+-    { 'name': 'dbus', 'if': 'CONFIG_DBUS_DISPLAY' }
++    { 'name': 'dbus', 'if': 'CONFIG_DBUS_DISPLAY' },
++    { 'name': 'canvas' }
+   ]
+ }
+ 
+diff --git a/ui/canvas.c b/ui/canvas.c
+new file mode 100644
+index 0000000000..6602f0b81a
+--- /dev/null
++++ b/ui/canvas.c
+@@ -0,0 +1,291 @@
++/*
++ * Browser canvas display for QEMU built with Emscripten.
++ *
++ * The guest's graphic console is converted to RGBA and handed to the page
++ * through a shared buffer; the page draws it with putImageData.  Keyboard and
++ * pointer events come back through a ring in shared memory that the page
++ * fills with Atomics and this listener drains on every refresh tick, on the
++ * QEMU main loop thread.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/atomic.h"
++#include "qemu/module.h"
++#include "ui/console.h"
++#include "ui/input.h"
++
++#ifdef __EMSCRIPTEN__
++#include <emscripten.h>
++#endif
++
++#define CANVAS_RING_EVENTS 1024
++
++enum {
++    CANVAS_EV_KEY = 1,     /* a = linux keycode, b = down */
++    CANVAS_EV_ABS = 2,     /* a = x, b = y, in canvas pixels */
++    CANVAS_EV_BTN = 3,     /* a = 0 left / 1 middle / 2 right, b = down */
++    CANVAS_EV_WHEEL = 4,   /* a = 1 up / -1 down */
++};
++
++/* [0] frame pending, [1] ring head (page writes), [2] ring tail (we write) */
++static int32_t canvas_shared[4];
++static int32_t canvas_ring[CANVAS_RING_EVENTS * 4];
++
++typedef struct CanvasDisplay {
++    DisplayChangeListener dcl;
++    DisplaySurface *surface;
++    pixman_image_t *rgba;
++    uint32_t *buf;
++    int width, height;
++    bool dirty;
++    /* Where we believe a relative (PS/2) guest pointer is; see canvas_abs */
++    int px, py, tx, ty;
++    bool homed, homing;
++} CanvasDisplay;
++
++static void canvas_resize(CanvasDisplay *cd, int w, int h)
++{
++    if (cd->rgba && cd->width == w && cd->height == h) {
++        return;
++    }
++    while (qatomic_read(&canvas_shared[0])) {
++        /* the page is still copying the old buffer */
++        g_usleep(1000);
++    }
++    if (cd->rgba) {
++        pixman_image_unref(cd->rgba);
++        g_free(cd->buf);
++    }
++    cd->width = w;
++    cd->height = h;
++    cd->buf = g_malloc0((size_t)w * h * 4);
++    /* a8b8g8r8 is R,G,B,A in memory on little endian: what ImageData wants */
++    cd->rgba = pixman_image_create_bits(PIXMAN_a8b8g8r8, w, h, cd->buf, w * 4);
++}
++
++static void canvas_push_frame(CanvasDisplay *cd)
++{
++    if (!cd->surface || !cd->rgba || qatomic_read(&canvas_shared[0])) {
++        return;
++    }
++    pixman_image_composite(PIXMAN_OP_SRC, cd->surface->image, NULL, cd->rgba,
++                           0, 0, 0, 0, 0, 0, cd->width, cd->height);
++    cd->dirty = false;
++    qatomic_set(&canvas_shared[0], 1);
++#ifdef __EMSCRIPTEN__
++    MAIN_THREAD_ASYNC_EM_ASM({
++        if (Module.canvasFrame) {
++            Module.canvasFrame($0, $1, $2, $3);
++        } else {
++            Atomics.store(HEAP32, $3 >> 2, 0);
++        }
++    }, cd->buf, cd->width, cd->height, &canvas_shared[0]);
++#else
++    qatomic_set(&canvas_shared[0], 0);
++#endif
++}
++
++/*
++ * Guests without an absolute pointer (no USB tablet driver) only see the
++ * PS/2 mouse.  For those we keep where the guest pointer should be and walk
++ * it towards the page's pointer with relative moves, assuming the guest
++ * moves 1:1 and clamps to the screen like we do.  At most CANVAS_REL_STEP
++ * per axis goes out per refresh, so the moves fit in the PS/2 queue and are
++ * never merged with later ones.  We start by "believing" the pointer is far
++ * beyond the bottom right and walking it to (0, 0), which pins it in the
++ * corner whatever its real position; only then do we follow the page.
++ */
++#define CANVAS_REL_STEP 240
++
++static bool canvas_relative(CanvasDisplay *cd)
++{
++    return !qemu_input_is_absolute(cd->dcl.con);
++}
++
++static void canvas_abs(CanvasDisplay *cd, int x, int y)
++{
++    QemuConsole *con = cd->dcl.con;
++
++    if (!canvas_relative(cd)) {
++        qemu_input_queue_abs(con, INPUT_AXIS_X, x, 0, cd->width);
++        qemu_input_queue_abs(con, INPUT_AXIS_Y, y, 0, cd->height);
++        return;
++    }
++    if (!cd->homed) {
++        cd->px = 2 * cd->width + 64;
++        cd->py = 2 * cd->height + 64;
++        cd->homed = true;
++        cd->homing = true;
++    }
++    cd->tx = MAX(0, MIN(cd->width - 1, x));
++    cd->ty = MAX(0, MIN(cd->height - 1, y));
++}
++
++static void canvas_rel_step(CanvasDisplay *cd)
++{
++    int dx, dy;
++
++    if (!cd->homed) {
++        return;
++    }
++    if (cd->homing && cd->px == 0 && cd->py == 0) {
++        cd->homing = false;
++    }
++    dx = MAX(-CANVAS_REL_STEP, MIN(CANVAS_REL_STEP, (cd->homing ? 0 : cd->tx) - cd->px));
++    dy = MAX(-CANVAS_REL_STEP, MIN(CANVAS_REL_STEP, (cd->homing ? 0 : cd->ty) - cd->py));
++    if (dx || dy) {
++        qemu_input_queue_rel(cd->dcl.con, INPUT_AXIS_X, dx);
++        qemu_input_queue_rel(cd->dcl.con, INPUT_AXIS_Y, dy);
++        qemu_input_event_sync();
++        cd->px += dx;
++        cd->py += dy;
++    }
++}
++
++static void canvas_drain_input(CanvasDisplay *cd)
++{
++    QemuConsole *con = cd->dcl.con;
++    int32_t head = qatomic_load_acquire(&canvas_shared[1]);
++    int32_t tail = qatomic_read(&canvas_shared[2]);
++    bool sync = false;
++
++    while (tail != head) {
++        int32_t *ev = &canvas_ring[(tail % CANVAS_RING_EVENTS) * 4];
++        static const InputButton btns[3] = {
++            INPUT_BUTTON_LEFT, INPUT_BUTTON_MIDDLE, INPUT_BUTTON_RIGHT,
++        };
++
++        switch (ev[0]) {
++        case CANVAS_EV_KEY:
++            if (ev[1] > 0 && ev[1] < qemu_input_map_linux_to_qcode_len) {
++                QKeyCode q = qemu_input_map_linux_to_qcode[ev[1]];
++                if (q) {
++                    qemu_input_event_send_key_qcode(con, q, ev[2] != 0);
++                }
++            }
++            break;
++        case CANVAS_EV_ABS:
++            if (cd->width && cd->height) {
++                canvas_abs(cd, ev[1], ev[2]);
++                sync = !canvas_relative(cd);
++            }
++            break;
++        case CANVAS_EV_BTN:
++            if (canvas_relative(cd) && cd->homed &&
++                (cd->homing || cd->px != cd->tx || cd->py != cd->ty)) {
++                /* click where the pointer will be: finish moving first */
++                goto out;
++            }
++            if (ev[1] >= 0 && ev[1] < 3) {
++                /*
++                 * Sync each button change on its own: a press and release
++                 * drained in the same tick would otherwise cancel out.
++                 */
++                if (sync) {
++                    qemu_input_event_sync();
++                    sync = false;
++                }
++                qemu_input_queue_btn(con, btns[ev[1]], ev[2] != 0);
++                qemu_input_event_sync();
++            }
++            break;
++        case CANVAS_EV_WHEEL: {
++            InputButton b = ev[1] > 0 ? INPUT_BUTTON_WHEEL_UP
++                                      : INPUT_BUTTON_WHEEL_DOWN;
++            qemu_input_queue_btn(con, b, true);
++            qemu_input_event_sync();
++            qemu_input_queue_btn(con, b, false);
++            sync = true;
++            break;
++        }
++        }
++        tail++;
++    }
++out:
++    qatomic_store_release(&canvas_shared[2], tail);
++    if (sync) {
++        qemu_input_event_sync();
++    }
++    if (canvas_relative(cd)) {
++        canvas_rel_step(cd);
++    }
++}
++
++static void canvas_refresh(DisplayChangeListener *dcl)
++{
++    CanvasDisplay *cd = container_of(dcl, CanvasDisplay, dcl);
++
++    graphic_hw_update(dcl->con);
++    canvas_drain_input(cd);
++    if (cd->dirty) {
++        canvas_push_frame(cd);
++    }
++}
++
++static void canvas_gfx_update(DisplayChangeListener *dcl,
++                              int x, int y, int w, int h)
++{
++    CanvasDisplay *cd = container_of(dcl, CanvasDisplay, dcl);
++    cd->dirty = true;
++}
++
++static void canvas_gfx_switch(DisplayChangeListener *dcl,
++                              DisplaySurface *surface)
++{
++    CanvasDisplay *cd = container_of(dcl, CanvasDisplay, dcl);
++
++    cd->surface = surface;
++    if (surface) {
++        canvas_resize(cd, surface_width(surface), surface_height(surface));
++#ifdef __EMSCRIPTEN__
++        MAIN_THREAD_ASYNC_EM_ASM({
++            if (Module.canvasResize) {
++                Module.canvasResize($0, $1);
++            }
++        }, cd->width, cd->height);
++#endif
++    }
++    cd->dirty = true;
++}
++
++static const DisplayChangeListenerOps canvas_ops = {
++    .dpy_name       = "canvas",
++    .dpy_refresh    = canvas_refresh,
++    .dpy_gfx_update = canvas_gfx_update,
++    .dpy_gfx_switch = canvas_gfx_switch,
++};
++
++static void canvas_init(DisplayState *ds, DisplayOptions *opts)
++{
++    QemuConsole *con = qemu_console_lookup_by_index(0);
++    CanvasDisplay *cd;
++
++    if (!con || !qemu_console_is_graphic(con)) {
++        return;
++    }
++    cd = g_new0(CanvasDisplay, 1);
++    cd->dcl.con = con;
++    cd->dcl.ops = &canvas_ops;
++    register_displaychangelistener(&cd->dcl);
++#ifdef __EMSCRIPTEN__
++    MAIN_THREAD_ASYNC_EM_ASM({
++        if (Module.canvasInit) {
++            Module.canvasInit($0, $1, $2);
++        }
++    }, canvas_ring, canvas_shared, CANVAS_RING_EVENTS);
++#endif
++}
++
++static QemuDisplay qemu_display_canvas = {
++    .type = DISPLAY_TYPE_CANVAS,
++    .init = canvas_init,
++};
++
++static void register_canvas(void)
++{
++    qemu_display_register(&qemu_display_canvas);
++}
++
++type_init(register_canvas);
+diff --git a/ui/meson.build b/ui/meson.build
+index 0ccb3387ee..b49bd73927 100644
+--- a/ui/meson.build
++++ b/ui/meson.build
+@@ -18,6 +18,7 @@ system_ss.add(files(
+   'ui-qmp-cmds.c',
+   'util.c',
+ ))
++system_ss.add(when: pixman, if_true: files('canvas.c'))
+ system_ss.add(when: pixman, if_true: files('console-vc.c'), if_false: files('console-vc-stubs.c'))
+ if dbus_display
+   system_ss.add(files('dbus-module.c'))
